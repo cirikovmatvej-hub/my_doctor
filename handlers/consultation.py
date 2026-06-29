@@ -28,6 +28,7 @@ from database.db import (
     get_user_profile,
     update_session_summary,
 )
+from handlers.appointment import schedule_appointment_followup
 from keyboards.keyboards import consult_for_keyboard, main_menu, remove_keyboard
 
 router = Router()
@@ -197,6 +198,10 @@ async def handle_symptom(message: Message, state: FSMContext) -> None:
     summary = f"[{_profile_line(gender, age_range)}] {(ai.get('text') or '')[:480]}"
     await update_session_summary(session_id, summary)
 
+    if ai.get("doctor_specialty"):
+        owner_id = await get_or_create_user(message.from_user.id, message.from_user.username)
+        await schedule_appointment_followup(owner_id, ai["doctor_specialty"])
+
     await state.clear()
     await message.answer(
         final_text,
@@ -251,6 +256,9 @@ async def _process_photo(message: Message, state: FSMContext) -> None:
         ai["doctor_specialty"] = "therapist"
 
     final_text = build_recommendation_message(ai)
+
+    owner_id = await get_or_create_user(message.from_user.id, message.from_user.username)
+    await schedule_appointment_followup(owner_id, ai["doctor_specialty"])
 
     await state.clear()
     await message.answer(
@@ -339,6 +347,10 @@ async def _process_pdf(message: Message, state: FSMContext) -> None:
         ai["doctor_specialty"] = "therapist"
 
     final_text = build_recommendation_message(ai)
+
+    owner_id = await get_or_create_user(message.from_user.id, message.from_user.username)
+    await schedule_appointment_followup(owner_id, ai["doctor_specialty"])
+
     await state.clear()
     await message.answer(
         final_text,

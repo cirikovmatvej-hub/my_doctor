@@ -83,6 +83,21 @@ async def init_db() -> None:
             )
         """)
         await db.execute("""
+            CREATE TABLE IF NOT EXISTS appointment_followups (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id           INTEGER NOT NULL,
+                doctor_specialty  TEXT NOT NULL,
+                status            TEXT DEFAULT 'pending',
+                ask_at            TIMESTAMP NOT NULL,
+                ask_sent          INTEGER DEFAULT 0,
+                not_booked_reason TEXT,
+                reminder_at       TIMESTAMP,
+                reminder_sent     INTEGER DEFAULT 0,
+                created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """)
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS family_members (
                 id                   INTEGER PRIMARY KEY AUTOINCREMENT,
                 owner_user_id        INTEGER NOT NULL,
@@ -444,6 +459,77 @@ async def get_near_end_courses() -> list:
 async def mark_end_reminder_sent(tracking_id: int) -> None:
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute("UPDATE product_tracking SET end_reminder_sent=1 WHERE id=?", (tracking_id,))
+        await db.commit()
+
+
+# ── Appointment follow-ups ──────────────────────────────────────────────────
+
+async def create_appointment_followup(user_id: int, doctor_specialty: str, ask_at: datetime) -> int:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "INSERT INTO appointment_followups (user_id, doctor_specialty, ask_at) VALUES (?, ?, ?)",
+            (user_id, doctor_specialty, ask_at.isoformat()),
+        )
+        await db.commit()
+        async with db.execute("SELECT last_insert_rowid()") as cur:
+            row = await cur.fetchone()
+        return row[0]
+
+
+async def get_due_appointment_asks(now: datetime) -> list:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with db.execute(
+            "SELECT af.id, u.telegram_id, af.doctor_specialty "
+            "FROM appointment_followups af JOIN users u ON u.id=af.user_id "
+            "WHERE af.ask_sent=0 AND af.ask_at<=?",
+            (now.isoformat(),),
+        ) as cur:
+            return await cur.fetchall()
+
+
+async def mark_appointment_ask_sent(followup_id: int) -> None:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("UPDATE appointment_followups SET ask_sent=1 WHERE id=?", (followup_id,))
+        await db.commit()
+
+
+async def set_appointment_status(followup_id: int, status: str) -> None:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("UPDATE appointment_followups SET status=? WHERE id=?", (status, followup_id))
+        await db.commit()
+
+
+async def set_appointment_reason(followup_id: int, reason: str) -> None:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "UPDATE appointment_followups SET not_booked_reason=? WHERE id=?", (reason, followup_id)
+        )
+        await db.commit()
+
+
+async def set_appointment_reminder(followup_id: int, reminder_at: datetime | None) -> None:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "UPDATE appointment_followups SET reminder_at=? WHERE id=?",
+            (reminder_at.isoformat() if reminder_at else None, followup_id),
+        )
+        await db.commit()
+
+
+async def get_due_appointment_reminders(now: datetime) -> list:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with db.execute(
+            "SELECT af.id, u.telegram_id, af.doctor_specialty "
+            "FROM appointment_followups af JOIN users u ON u.id=af.user_id "
+            "WHERE af.reminder_sent=0 AND af.reminder_at IS NOT NULL AND af.reminder_at<=?",
+            (now.isoformat(),),
+        ) as cur:
+            return await cur.fetchall()
+
+
+async def mark_appointment_reminder_sent(followup_id: int) -> None:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("UPDATE appointment_followups SET reminder_sent=1 WHERE id=?", (followup_id,))
         await db.commit()
 
 

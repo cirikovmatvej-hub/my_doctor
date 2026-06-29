@@ -7,7 +7,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from config import BOT_TOKEN
 from database.db import init_db
 from handlers import consultation, followup, history, profile, start
-from handlers import bad_advisor, family, tracker, diary
+from handlers import appointment, bad_advisor, family, tracker, diary
 
 
 async def main() -> None:
@@ -26,6 +26,7 @@ async def main() -> None:
     dp.include_router(profile.router)
     dp.include_router(family.router)
     dp.include_router(followup.router)
+    dp.include_router(appointment.router)
     dp.include_router(bad_advisor.router)
     dp.include_router(tracker.router)
     dp.include_router(diary.router)
@@ -39,6 +40,7 @@ async def main() -> None:
         dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types()),
         followup.follow_up_loop(bot),
         tracker.reminder_loop(bot),
+        appointment.appointment_loop(bot),
     )
 
 

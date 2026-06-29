@@ -261,6 +261,36 @@ def family_delete_keyboard(member_id: int) -> InlineKeyboardMarkup:
     ]])
 
 
+def appointment_booked_keyboard(followup_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Да, записался",  callback_data=f"appt:booked:{followup_id}"),
+        InlineKeyboardButton(text="❌ Нет",            callback_data=f"appt:notbooked:{followup_id}"),
+    ]])
+
+
+def appointment_reason_keyboard(followup_id: int) -> InlineKeyboardMarkup:
+    reasons = [
+        ("💰 Дорого", "expensive"),
+        ("⏰ Не было времени", "no_time"),
+        ("🤔 Решил(а) понаблюдать", "watch"),
+        ("📝 Другое", "other"),
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=label, callback_data=f"appt:reason:{followup_id}:{key}")]
+        for label, key in reasons
+    ])
+
+
+def appointment_remind_keyboard(followup_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🌅 Завтра утром",   callback_data=f"appt:remind:{followup_id}:tomorrow")],
+        [InlineKeyboardButton(text="📅 Через 3 дня",     callback_data=f"appt:remind:{followup_id}:3days")],
+        [InlineKeyboardButton(text="🗓 Через неделю",    callback_data=f"appt:remind:{followup_id}:week")],
+        [InlineKeyboardButton(text="✏️ Своя дата",       callback_data=f"appt:remind:{followup_id}:custom")],
+        [InlineKeyboardButton(text="🚫 Не нужно",        callback_data=f"appt:remind:{followup_id}:none")],
+    ])
+
+
 def consult_for_keyboard(members: list) -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton(text="👤 Для себя", callback_data="consult_for:self")]]
     for member_id, name, relation in members:
