@@ -35,13 +35,22 @@ async def main() -> None:
 
     logging.info("Бот запущен ✅ (v2)")
 
-    # All background loops run in parallel with the polling
-    await asyncio.gather(
-        dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types()),
-        followup.follow_up_loop(bot),
-        tracker.reminder_loop(bot),
-        appointment.appointment_loop(bot),
-    )
+    # Background loops run alongside polling. They must be cancelled
+    # explicitly once polling stops (e.g. on SIGTERM/SIGINT) — otherwise the
+    # process hangs until systemd's stop timeout forces a SIGKILL, since the
+    # loops sit in asyncio.sleep() and asyncio.gather() would wait for them.
+    background_tasks = [
+        asyncio.create_task(followup.follow_up_loop(bot)),
+        asyncio.create_task(tracker.reminder_loop(bot)),
+        asyncio.create_task(appointment.appointment_loop(bot)),
+    ]
+
+    try:
+        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+    finally:
+        for task in background_tasks:
+            task.cancel()
+        await asyncio.gather(*background_tasks, return_exceptions=True)
 
 
 if __name__ == "__main__":
