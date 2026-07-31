@@ -39,8 +39,7 @@ BAD_DETAILS: dict[str, dict] = {
         "best_time": "вечером, за 30–60 минут до сна",
         "with_food": True,
         "notes": "Принимайте 2 капсулы вечером во время еды. Возможен лёгкий слабительный эффект в первую неделю — это норма.",
-        "contraindication_keywords": ["почечн", "брадикард", "гипотон", "миастени"],
-        "drug_interaction_keywords": ["тетрациклин", "бисфосфонат", "левотироксин"],
+        "ingredient_ids": ["magnesium"],
         "pregnancy_safe": False,
     },
     "collagen": {
@@ -54,8 +53,7 @@ BAD_DETAILS: dict[str, dict] = {
         "best_time": "утром натощак и вечером за 30 мин до сна",
         "with_food": False,
         "notes": "Принимайте натощак — так коллаген усваивается лучше всего. Пейте 1.5–2 л воды в день. Первые результаты заметны через 4–6 недель.",
-        "contraindication_keywords": [],
-        "drug_interaction_keywords": [],
+        "ingredient_ids": ["collagen"],
         "pregnancy_safe": False,
     },
     "vitamin_d3": {
@@ -69,8 +67,7 @@ BAD_DETAILS: dict[str, dict] = {
         "best_time": "утром во время завтрака",
         "with_food": True,
         "notes": "Принимайте 2 капсулы утром с жирной едой (яйца, масло, орехи) — жиры увеличивают усвоение D3 до 50%. Безопасен при беременности в терапевтических дозах.",
-        "contraindication_keywords": ["гиперкальциеми", "саркоидоз", "гипервитаминоз"],
-        "drug_interaction_keywords": ["тиазидн"],
+        "ingredient_ids": ["vitamin_d3"],
         "pregnancy_safe": True,
     },
 }

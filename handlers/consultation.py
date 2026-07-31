@@ -29,9 +29,24 @@ from database.db import (
     update_session_summary,
 )
 from handlers.appointment import schedule_appointment_followup
-from keyboards.keyboards import consult_for_keyboard, main_menu, remove_keyboard
+from keyboards.keyboards import (
+    consult_for_keyboard, general_supplement_keyboard, main_menu,
+    remove_keyboard, track_start_keyboard,
+)
 
 router = Router()
+
+def _bad_tracking_keyboard(ai: dict):
+    """Inline 'start tracking' button matching whichever supplement the AI suggested —
+    our catalog (linked to Ozon) or a general non-catalog suggestion (custom tracker)."""
+    bad_key = ai.get("bad_recommendation")
+    if bad_key:
+        return track_start_keyboard(bad_key)
+    general_suggestion = ai.get("general_supplement_suggestion")
+    if general_suggestion:
+        return general_supplement_keyboard(general_suggestion)
+    return None
+
 
 EMERGENCY_MSG = (
     "🚨 <b>Внимание!</b>\n\n"
@@ -60,6 +75,20 @@ async def _force_recommendation(
 ) -> dict:
     hint = {"role": "user", "content": "Это все мои симптомы. Пожалуйста, дай рекомендации."}
     return await analyze_symptoms(messages + [hint], gender=gender, age_range=age_range, profile=profile)
+
+
+async def _load_gender_age(state: FSMContext, telegram_id: int) -> tuple[str | None, str | None]:
+    """gender/age_range for photo/PDF analysis (these paths don't use tool-calling,
+    so they don't need the full health profile — see analyze_photo/analyze_lab_text)."""
+    data = await state.get_data()
+    gender    = data.get("gender")
+    age_range = data.get("age_range")
+    if gender is None:
+        profile = await get_user_profile(telegram_id)
+        if profile:
+            gender    = profile["gender"]
+            age_range = profile["age_range"]
+    return gender, age_range
 
 
 def _profile_line(gender: str | None, age_range: str | None) -> str:
@@ -203,12 +232,15 @@ async def handle_symptom(message: Message, state: FSMContext) -> None:
         await schedule_appointment_followup(owner_id, ai["doctor_specialty"])
 
     await state.clear()
+    keyboard = _bad_tracking_keyboard(ai)
     await message.answer(
         final_text,
         parse_mode="HTML",
-        reply_markup=main_menu(),
+        reply_markup=keyboard or main_menu(),
         disable_web_page_preview=True,
     )
+    if keyboard:
+        await message.answer("Выберите действие 👇", reply_markup=main_menu())
 
 
 @router.message(
@@ -237,17 +269,7 @@ async def _process_photo(message: Message, state: FSMContext) -> None:
     image_b64 = base64.b64encode(raw_bytes).decode()
     logging.info(f"Photo downloaded: {len(raw_bytes)} bytes, b64 len={len(image_b64)}")
 
-    # Load profile for context
-    data = await state.get_data()
-    gender    = data.get("gender")
-    age_range = data.get("age_range")
-
-    if gender is None:
-        from database.db import get_user_profile
-        profile = await get_user_profile(message.from_user.id)
-        if profile:
-            gender    = profile["gender"]
-            age_range = profile["age_range"]
+    gender, age_range = await _load_gender_age(state, message.from_user.id)
 
     ai = await analyze_photo(image_b64, gender=gender, age_range=age_range)
 
@@ -261,12 +283,15 @@ async def _process_photo(message: Message, state: FSMContext) -> None:
     await schedule_appointment_followup(owner_id, ai["doctor_specialty"])
 
     await state.clear()
+    keyboard = _bad_tracking_keyboard(ai)
     await message.answer(
         final_text,
         parse_mode="HTML",
-        reply_markup=main_menu(),
+        reply_markup=keyboard or main_menu(),
         disable_web_page_preview=True,
     )
+    if keyboard:
+        await message.answer("Выберите действие 👇", reply_markup=main_menu())
 
 
 @router.message(Consultation.active, F.photo)
@@ -291,15 +316,7 @@ async def _process_pdf(message: Message, state: FSMContext) -> None:
     await message.bot.download_file(file.file_path, destination=buf)
     pdf_bytes = buf.getvalue()
 
-    # Load profile for context
-    data = await state.get_data()
-    gender    = data.get("gender")
-    age_range = data.get("age_range")
-    if gender is None:
-        profile = await get_user_profile(message.from_user.id)
-        if profile:
-            gender    = profile["gender"]
-            age_range = profile["age_range"]
+    gender, age_range = await _load_gender_age(state, message.from_user.id)
 
     if not _FITZ_AVAILABLE:
         await message.answer(
@@ -352,12 +369,15 @@ async def _process_pdf(message: Message, state: FSMContext) -> None:
     await schedule_appointment_followup(owner_id, ai["doctor_specialty"])
 
     await state.clear()
+    keyboard = _bad_tracking_keyboard(ai)
     await message.answer(
         final_text,
         parse_mode="HTML",
-        reply_markup=main_menu(),
+        reply_markup=keyboard or main_menu(),
         disable_web_page_preview=True,
     )
+    if keyboard:
+        await message.answer("Выберите действие 👇", reply_markup=main_menu())
 
 
 @router.message(Consultation.active, F.document, F.document.mime_type == _PDF_MIME)

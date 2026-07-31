@@ -46,10 +46,27 @@ doctor_specialty — ОБЯЗАТЕЛЬНО, одно из:
   "gynecologist" → женское здоровье, менструальный цикл, гинекологические боли
   "pediatrician" → симптомы у детей
 
-bad_recommendation — ТОЛЬКО при lifestyle-проблемах (не при острых медицинских состояниях):
-  "magnesium"   → плохой сон, стресс, тревожность, раздражительность, мышечные судороги
-  "collagen"    → проблемы с кожей, волосами, ногтями, суставами
-  "vitamin_d3"  → слабость, частые болезни, низкий иммунитет, упадок сил, депрессивный фон
+bad_recommendation — ТОЛЬКО при lifestyle-проблемах (не при острых медицинских состояниях),
+и ТОЛЬКО через инструменты (не по памяти):
+  1. Вызови list_bads_catalog — узнай, какие БАД реально есть в каталоге и от чего они.
+  2. Если по показаниям подходит один из них — вызови check_bad_safety(bad_key) для
+     ЭТОГО пациента, чтобы проверить противопоказания и взаимодействия с его профилем.
+  3. Если check_bad_safety вернул warnings с kind="contraindication" — НЕ указывай этот
+     bad_recommendation, вместо этого упомяни риск в тексте ответа и направь к врачу.
+     В этом случае НЕ переноси тот же продукт в general_supplement_suggestion — это поле
+     только для добавок, которых НЕТ в нашем каталоге, а не для замены заблокированной
+     рекомендации.
+     Предупреждения с kind="caution"/"interaction"/"general_caution" не запрещают
+     рекомендацию, но обязательно упомяни их простыми словами в тексте ответа.
+
+general_supplement_suggestion — если для lifestyle-проблемы идеально подошла бы добавка,
+которой НЕТ в нашем каталоге (например: железо, омега-3, витамин B12, пробиотики,
+хондроитин+глюкозамин) — укажи её здесь простыми словами, без вызова инструментов
+(они знают только о нашем каталоге). Никогда не указывай здесь название БАД из нашего
+каталога (magnesium/collagen/vitamin_d3), даже если check_bad_safety его заблокировал.
+ВАЖНО: НЕ пытайся подогнать проблему под наш каталог, если она ему на самом деле не
+соответствует — честная рекомендация важнее продажи нашего продукта. Если general_supplement_suggestion
+заполнен, bad_recommendation должен быть null, и наоборот.
 
 is_lifestyle — true если это проблема образа жизни/самочувствия, false если острая медицинская ситуация
 
@@ -73,11 +90,12 @@ is_lifestyle — true если это проблема образа жизни/�
   "text": "текст сообщения пользователю (без упоминания врача и БАДов — это добавится автоматически)",
   "doctor_specialty": null | "therapist" | "surgeon" | "cardiologist" | "neurologist" | "gynecologist" | "pediatrician",
   "bad_recommendation": null | "magnesium" | "collagen" | "vitamin_d3",
+  "general_supplement_suggestion": null | "название добавки простыми словами",
   "is_lifestyle": false | true
 }}
 
-Для type=question: doctor_specialty=null, bad_recommendation=null, is_lifestyle=false
-Для type=emergency: doctor_specialty=null, bad_recommendation=null, is_lifestyle=false"""
+Для type=question: doctor_specialty=null, bad_recommendation=null, general_supplement_suggestion=null, is_lifestyle=false
+Для type=emergency: doctor_specialty=null, bad_recommendation=null, general_supplement_suggestion=null, is_lifestyle=false"""
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +182,115 @@ def _build_system(
     return SYSTEM_PROMPT + profile_note
 
 
+MAX_TOOL_ROUNDS = 3
+
+
+async def _run_tool_loop(
+    chat_messages: list[dict],
+    model: str,
+    profile: dict | None,
+    reasoning_format: str | None = None,
+    max_tokens: int = 900,
+) -> dict:
+    """Shared tool-dispatch loop: lets the model call list_bads_catalog/
+    check_bad_safety (ai/tools.py) instead of free-associating a supplement
+    from its own training knowledge. check_bad_safety is executed against the
+    *real* profile passed in here — the model only ever supplies a bad_key,
+    never health data.
+
+    `reasoning_format` is only needed for "thinking" models (the vision model)
+    to keep <think> reasoning out of the JSON content — "parsed" is the value
+    that's been verified to work with both tool-calling and JSON mode. Note
+    reasoning tokens still count against max_tokens even when hidden from
+    `content`, so thinking models need a bigger budget than plain text models.
+    """
+    from ai.tools import TOOL_SCHEMAS, execute_tool
+
+    extra_body = {"reasoning_format": reasoning_format} if reasoning_format else None
+
+    # Keyed by bad_key — captured as the model calls check_bad_safety, so the
+    # final warnings can be attached to the response deterministically instead
+    # of trusting the model to relay them in its free-text answer.
+    safety_results: dict[str, dict] = {}
+
+    msg = None
+    for _ in range(MAX_TOOL_ROUNDS):
+        kwargs = dict(
+            model=model, messages=chat_messages,
+            tools=TOOL_SCHEMAS, tool_choice="auto",
+            temperature=0.3, max_tokens=max_tokens,
+        )
+        if extra_body:
+            kwargs["extra_body"] = extra_body
+        response = await client.chat.completions.create(**kwargs)
+        msg = response.choices[0].message
+        if not msg.tool_calls:
+            break
+
+        chat_messages.append({
+            "role": "assistant",
+            "content": msg.content,
+            "tool_calls": [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                }
+                for tc in msg.tool_calls
+            ],
+        })
+        for tc in msg.tool_calls:
+            try:
+                args = json.loads(tc.function.arguments or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            result = execute_tool(tc.function.name, args, profile)
+            if tc.function.name == "check_bad_safety" and "bad_key" in result:
+                safety_results[result["bad_key"]] = result
+            chat_messages.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "content": json.dumps(result, ensure_ascii=False),
+            })
+    else:
+        # Exhausted rounds while the model kept calling tools — force a final answer.
+        chat_messages.append({
+            "role": "user",
+            "content": "Дай финальный ответ строго в формате JSON, как указано в инструкциях, без новых вызовов инструментов.",
+        })
+        kwargs = dict(
+            model=model, messages=chat_messages,
+            response_format={"type": "json_object"},
+            temperature=0.3, max_tokens=max_tokens,
+        )
+        if extra_body:
+            kwargs["extra_body"] = extra_body
+        response = await client.chat.completions.create(**kwargs)
+        msg = response.choices[0].message
+
+    parsed = _extract_json(msg.content or "")
+    if parsed is None:
+        # Thinking-model reasoning length varies run to run and can occasionally
+        # burn through the whole budget before the final JSON is written out —
+        # retry the same call once with double the budget before giving up.
+        logging.warning("Empty/invalid JSON response, retrying with larger max_tokens")
+        retry_kwargs = dict(kwargs)
+        retry_kwargs["max_tokens"] = min(max_tokens * 2, 6000)
+        response = await client.chat.completions.create(**retry_kwargs)
+        msg = response.choices[0].message
+        parsed = _extract_json(msg.content or "")
+
+    if parsed is None:
+        raise ValueError(f"Model response was not valid JSON: {msg.content!r}")
+
+    bad_key = parsed.get("bad_recommendation")
+    safety = safety_results.get(bad_key) if bad_key else None
+    if safety and safety["warnings"]:
+        parsed["_grounded_safety_warnings"] = [w["message"] for w in safety["warnings"]]
+
+    return parsed
+
+
 async def analyze_symptoms(
     messages: list[dict],
     gender: str | None = None,
@@ -171,15 +298,12 @@ async def analyze_symptoms(
     profile: dict | None = None,
 ) -> dict:
     """Call Groq Llama and return a parsed response dict."""
+    chat_messages = [
+        {"role": "system", "content": _build_system(gender, age_range, profile)}
+    ] + list(messages)
+
     try:
-        response = await client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "system", "content": _build_system(gender, age_range, profile)}] + messages,
-            response_format={"type": "json_object"},
-            temperature=0.3,
-            max_tokens=800,
-        )
-        return json.loads(response.choices[0].message.content)
+        return await _run_tool_loop(chat_messages, "llama-3.3-70b-versatile", profile)
     except Exception as e:
         logging.error(f"OpenAI error: {e}")
         return {
@@ -187,6 +311,7 @@ async def analyze_symptoms(
             "text": "Произошла техническая ошибка. Рекомендую обратиться к терапевту для очной консультации.",
             "doctor_specialty": "therapist",
             "bad_recommendation": None,
+            "general_supplement_suggestion": None,
             "is_lifestyle": False,
         }
 
@@ -209,10 +334,14 @@ PHOTO_PROMPT = """Ты медицинский ассистент. Пользов
 - Если фото нечёткое или не является медицинским документом — честно скажи об этом
 - Ответ — 2–4 коротких абзаца
 
-BAD-рекомендации (только при явных показаниях):
+BAD-рекомендации (только при явных показаниях, и только если это реально один из НАШИХ БАД):
   magnesium   → дефицит магния, нарушения сна, стресс, мышечные спазмы
   vitamin_d3  → низкий витамин D, слабый иммунитет, хроническая усталость
   collagen    → проблемы с суставами, кожей, волосами, ногтями
+
+Если по анализам идеально подошла бы добавка не из нашего каталога (железо, B12,
+омега-3, пробиотики и т.д.) — укажи её в general_supplement_suggestion простыми
+словами, а bad_recommendation оставь null. Не подгоняй результат под наш каталог.
 
 ПРАВИЛО ПО ВРАЧУ — doctor_specialty ВСЕГДА обязателен, никогда не null:
   "therapist"    → общий анализ крови, биохимия, неясная причина
@@ -227,6 +356,7 @@ BAD-рекомендации (только при явных показания�
   "text": "ответ пользователю — без упоминания врача и БАД, они добавятся автоматически",
   "doctor_specialty": "therapist" | "surgeon" | "cardiologist" | "neurologist" | "gynecologist" | "pediatrician",
   "bad_recommendation": null | "magnesium" | "collagen" | "vitamin_d3",
+  "general_supplement_suggestion": null | "название добавки простыми словами",
   "is_lifestyle": false | true
 }"""
 
@@ -255,9 +385,24 @@ def _extract_json(text: str) -> dict | None:
     return None
 
 
-_VISION_MODELS = [
-    "meta-llama/llama-4-scout-17b-16e-instruct",
-]
+# Groq deprecated the old llama-4-scout vision model; qwen/qwen3.6-27b is the
+# current vision-capable model and (unlike the old one) supports tool-calling
+# and JSON mode. It's a "thinking" model — reasoning_format="parsed" keeps
+# <think> reasoning out of the JSON content (verified: "hidden" breaks JSON
+# mode entirely on this model, "parsed" works with both JSON mode and tools).
+_VISION_MODEL = "qwen/qwen3.6-27b"
+_VISION_REASONING_FORMAT = "parsed"
+
+
+def _profile_note(gender: str | None, age_range: str | None) -> str:
+    if not (gender or age_range):
+        return ""
+    parts = []
+    if gender:
+        parts.append(f"пол: {GENDER_RU.get(gender, gender)}")
+    if age_range:
+        parts.append(f"возраст: {AGE_RU.get(age_range, age_range)}")
+    return f"\n\nДАННЫЕ ПАЦИЕНТА: {', '.join(parts)}"
 
 
 async def analyze_photo(
@@ -265,70 +410,57 @@ async def analyze_photo(
     gender: str | None = None,
     age_range: str | None = None,
 ) -> dict:
-    """Send a base64 image to the Groq vision model and return parsed response."""
-    profile_note = ""
-    if gender or age_range:
-        parts = []
-        if gender:
-            parts.append(f"пол: {GENDER_RU.get(gender, gender)}")
-        if age_range:
-            parts.append(f"возраст: {AGE_RU.get(age_range, age_range)}")
-        profile_note = f"\n\nДАННЫЕ ПАЦИЕНТА: {', '.join(parts)}"
+    """Send a base64 image to the Groq vision model and return parsed response.
 
-    prompt = PHOTO_PROMPT + profile_note
-    last_error = None
+    No tool-calling here (unlike analyze_symptoms) — qwen/qwen3.6-27b's free-tier
+    daily token quota (200k) is easily exhausted by a multi-round tool loop, since
+    its internal reasoning alone can burn 500-1600+ tokens per call. bad_recommendation
+    is picked from the hardcoded PHOTO_PROMPT list here, same as before Phase 4.
+    """
+    prompt = PHOTO_PROMPT + _profile_note(gender, age_range)
+    messages = [{
+        "role": "user",
+        "content": [
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+            {"type": "text", "text": prompt},
+        ],
+    }]
 
-    for model in _VISION_MODELS:
-        try:
+    max_tokens = 2500
+    try:
+        # Thinking-model reasoning tokens count against max_tokens even though
+        # reasoning_format="parsed" hides them from `content` — reasoning length
+        # varies run to run, so retry once with a bigger budget if the JSON came
+        # back truncated/empty before giving up.
+        for attempt_max_tokens in (max_tokens, min(max_tokens * 2, 5000)):
             response = await client.chat.completions.create(
-                model=model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
-                            },
-                            {"type": "text", "text": prompt},
-                        ],
-                    }
-                ],
-                # NOTE: no response_format — vision models don't support JSON mode
+                model=_VISION_MODEL,
+                messages=messages,
+                response_format={"type": "json_object"},
+                extra_body={"reasoning_format": _VISION_REASONING_FORMAT},
                 temperature=0.3,
-                max_tokens=900,
+                max_tokens=attempt_max_tokens,
             )
             raw = response.choices[0].message.content
-            logging.info(f"Vision raw response ({model}): {raw[:200]}")
-
-            result = _extract_json(raw)
+            result = _extract_json(raw or "")
             if result and "text" in result:
                 return result
+            logging.warning(f"Vision response not valid JSON (max_tokens={attempt_max_tokens}): {raw!r}")
 
-            # Model replied but without JSON — use the text as-is
-            return {
-                "text": raw.strip(),
-                "doctor_specialty": "therapist",
-                "bad_recommendation": None,
-                "is_lifestyle": False,
-            }
-
-        except Exception as e:
-            last_error = e
-            logging.warning(f"Vision model {model} failed: {e}")
-            continue
-
-    logging.error(f"All vision models failed. Last error: {last_error}")
-    return {
-        "text": (
-            "Не удалось обработать изображение 😔\n"
-            "Убедитесь, что фото чёткое и хорошо освещённое, "
-            "или опишите симптомы текстом — я обязательно помогу."
-        ),
-        "doctor_specialty": None,
-        "bad_recommendation": None,
-        "is_lifestyle": False,
-    }
+        raise ValueError("Vision model did not return valid JSON after retry")
+    except Exception as e:
+        logging.error(f"Vision model error: {e}")
+        return {
+            "text": (
+                "Не удалось обработать изображение 😔\n"
+                "Убедитесь, что фото чёткое и хорошо освещённое, "
+                "или опишите симптомы текстом — я обязательно помогу."
+            ),
+            "doctor_specialty": None,
+            "bad_recommendation": None,
+            "general_supplement_suggestion": None,
+            "is_lifestyle": False,
+        }
 
 
 async def analyze_lab_text(
@@ -337,16 +469,10 @@ async def analyze_lab_text(
     age_range: str | None = None,
 ) -> dict:
     """Analyze lab results extracted from PDF as plain text via the text model."""
-    profile_note = ""
-    if gender or age_range:
-        parts = []
-        if gender:
-            parts.append(f"пол: {GENDER_RU.get(gender, gender)}")
-        if age_range:
-            parts.append(f"возраст: {AGE_RU.get(age_range, age_range)}")
-        profile_note = f"\n\nДАННЫЕ ПАЦИЕНТА: {', '.join(parts)}"
-
-    prompt = PHOTO_PROMPT + profile_note + "\n\nТЕКСТ ИЗ PDF-ДОКУМЕНТА С АНАЛИЗАМИ:\n" + text[:3000]
+    prompt = (
+        PHOTO_PROMPT + _profile_note(gender, age_range)
+        + "\n\nТЕКСТ ИЗ PDF-ДОКУМЕНТА С АНАЛИЗАМИ:\n" + text[:3000]
+    )
 
     try:
         response = await client.chat.completions.create(
@@ -364,6 +490,7 @@ async def analyze_lab_text(
             "text": raw.strip(),
             "doctor_specialty": "therapist",
             "bad_recommendation": None,
+            "general_supplement_suggestion": None,
             "is_lifestyle": False,
         }
     except Exception as e:
@@ -372,6 +499,7 @@ async def analyze_lab_text(
             "text": "Не удалось проанализировать документ 😔\nОпишите симптомы текстом — я обязательно помогу.",
             "doctor_specialty": "therapist",
             "bad_recommendation": None,
+            "general_supplement_suggestion": None,
             "is_lifestyle": False,
         }
 
@@ -395,6 +523,17 @@ def build_recommendation_message(ai_response: dict) -> str:
         parts += [
             "💊 <b>Рекомендуем поддерживающий БАД:</b>",
             f'✨ <a href="{b["url"]}">{b["name"]}</a> — {b["description"]}',
+        ]
+        grounded_warnings = ai_response.get("_grounded_safety_warnings")
+        if grounded_warnings:
+            parts += [""] + [f"⚠️ {w}" for w in grounded_warnings]
+
+    general_suggestion = ai_response.get("general_supplement_suggestion")
+    if general_suggestion:
+        parts += [
+            "💊 <b>Может помочь:</b>",
+            f"{general_suggestion} — этого нет в нашем каталоге, но перед началом приёма "
+            "в любом случае посоветуйтесь с врачом.",
         ]
 
     return "\n".join(parts).strip()

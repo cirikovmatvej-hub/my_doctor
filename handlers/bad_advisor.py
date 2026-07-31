@@ -11,56 +11,12 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from data.bad_safety import check_bad_safety, get_bad_synergies, suggest_goal_keys
 from data.resources import BAD_DETAILS, BAD_GOALS, BADS, LIFESTYLE_TIPS
 from database.db import get_user_profile
 from keyboards.keyboards import bad_goals_keyboard, main_menu, track_start_keyboard
 
 router = Router()
-
-
-# ── Safety check ──────────────────────────────────────────────────────────
-
-def _check_safety(bad_key: str, profile: dict | None) -> list[str]:
-    """Return list of warning strings for this BAD given the user's health profile."""
-    if not profile:
-        return []
-    bad = BAD_DETAILS[bad_key]
-    warnings = []
-
-    chronic   = (profile.get("chronic_diseases") or "").lower()
-    allergies = (profile.get("allergies") or "").lower()
-    meds      = (profile.get("medications")      or "").lower()
-    pregnancy = profile.get("pregnancy") or "no"
-
-    name = bad["full_name"]
-
-    # Pregnancy / lactation
-    if pregnancy in ("pregnant", "lactating") and not bad.get("pregnancy_safe", False):
-        warnings.append(
-            f"⚠️ <b>{name}</b>: не подтверждена безопасность при беременности/лактации "
-            "— перед приёмом проконсультируйтесь с врачом."
-        )
-
-    # Contraindication keywords
-    combined = chronic + " " + allergies
-    for kw in bad.get("contraindication_keywords", []):
-        if kw in combined:
-            warnings.append(
-                f"⚠️ <b>{name}</b>: обнаружено возможное противопоказание "
-                f"(«{kw}» в вашем профиле) — уточните у врача."
-            )
-            break
-
-    # Drug interaction keywords
-    for kw in bad.get("drug_interaction_keywords", []):
-        if kw in meds:
-            warnings.append(
-                f"⚠️ <b>{name}</b>: возможно взаимодействие с вашими препаратами "
-                f"(«{kw}») — уточните у врача перед приёмом."
-            )
-            break
-
-    return warnings
 
 
 # ── BAD card builder ──────────────────────────────────────────────────────
@@ -69,16 +25,25 @@ def _build_bad_card(bad_key: str) -> str:
     d = BAD_DETAILS[bad_key]
     b = BADS[bad_key]
     with_food = "да, принимайте с едой" if d["with_food"] else "натощак или без привязки к еде"
-    return (
+    parts = [
         f"{d['emoji']} <b>{d['full_name']}</b>\n"
         f"🎯 {d['goal']}\n\n"
         f"📅 Курс: <b>{d['course_days']} дней</b>\n"
         f"💊 Доза: {d['dosage']}\n"
         f"🕐 Время приёма: {d['best_time']}\n"
         f"🍽 С едой: {with_food}\n\n"
-        f"📝 {d['notes']}\n\n"
-        f'🛒 <a href="{b["url"]}">Купить на Ozon</a>'
-    )
+        f"📝 {d['notes']}"
+    ]
+
+    synergies = get_bad_synergies(bad_key)
+    if synergies:
+        parts.append(
+            "\n🤝 <b>Сочетание с другими нутриентами:</b>\n"
+            + "\n".join(f"• {s.message}" for s in synergies)
+        )
+
+    parts.append(f'\n🛒 <a href="{b["url"]}">Купить на Ozon</a>')
+    return "\n".join(parts)
 
 
 # ── Handlers ──────────────────────────────────────────────────────────────
@@ -86,11 +51,18 @@ def _build_bad_card(bad_key: str) -> str:
 @router.message(F.text == "💊 Подбор БАД")
 async def cmd_bad_advisor(message: Message, state: FSMContext) -> None:
     await state.clear()
+    profile = await get_user_profile(message.from_user.id)
+    suggested = suggest_goal_keys(profile)
+
+    intro = "🎯 <b>Подбор БАД под вашу цель</b>\n\n"
+    if suggested:
+        intro += "Судя по вашему профилю, вам может быть особенно актуально то, что отмечено ⭐.\n\n"
+    intro += "Выберите, что сейчас важнее для вас:"
+
     await message.answer(
-        "🎯 <b>Подбор БАД под вашу цель</b>\n\n"
-        "Выберите, что сейчас важнее для вас:",
+        intro,
         parse_mode="HTML",
-        reply_markup=bad_goals_keyboard(),
+        reply_markup=bad_goals_keyboard(suggested),
     )
 
 
@@ -114,7 +86,7 @@ async def cb_goal_selected(call: CallbackQuery, state: FSMContext) -> None:
     # ── Safety warnings ────────────────────────────────────────────────────
     all_warnings = []
     for bad_key in goal["bads"]:
-        all_warnings.extend(_check_safety(bad_key, profile))
+        all_warnings.extend(f"⚠️ {w.message}" for w in check_bad_safety(bad_key, profile))
 
     if all_warnings:
         warning_text = (

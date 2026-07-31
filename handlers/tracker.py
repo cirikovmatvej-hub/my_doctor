@@ -1,13 +1,23 @@
 """
 Tracker — supplement tracking with custom reminder times + timezone support.
 
-Setup flow:
+Setup flow (catalog БАД, from bad_advisor card):
   "🔔 Начать курс" → timezone (first time only) → time_1 → time_2 (if 2x/day) → confirm
+
+Setup flow (custom, non-catalog БАД):
+  "➕ Другой БАД" → name → course length → 1x/2x a day → (same time-picking as above)
+
+Both flows converge on the same time-selection code, driven by daily_doses/
+default_times/course_days stored in FSM state rather than looked up from
+BAD_DETAILS — custom entries simply aren't in that dict, and the DB layer
+already treats product_key as an opaque string (no catalog validation there),
+so a custom entry is stored exactly like a catalog one under the hood.
 
 Reminder loop: checks every minute (UTC), fires when user's local time matches set time.
 """
 import asyncio
 import logging
+import re
 from datetime import datetime, timezone
 
 from aiogram import Bot, F, Router
@@ -23,7 +33,8 @@ from database.db import (
     mark_reminder_sent, set_utc_offset,
 )
 from keyboards.keyboards import (
-    intake_keyboard, main_menu, time_keyboard, timezone_keyboard,
+    daily_doses_keyboard, intake_keyboard, main_menu, time_keyboard,
+    timezone_keyboard, tracker_menu_keyboard,
 )
 
 router = Router()
@@ -34,11 +45,14 @@ REMINDER_CHECK_INTERVAL = 60  # проверяем каждую минуту
 # ── States ─────────────────────────────────────────────────────────────────
 
 class TrackerState(StatesGroup):
-    selecting_timezone    = State()
-    selecting_time_1      = State()
-    entering_custom_time_1 = State()
-    selecting_time_2      = State()
-    entering_custom_time_2 = State()
+    entering_custom_name        = State()
+    entering_custom_course_days = State()
+    selecting_daily_doses       = State()
+    selecting_timezone          = State()
+    selecting_time_1            = State()
+    entering_custom_time_1      = State()
+    selecting_time_2            = State()
+    entering_custom_time_2      = State()
 
 
 # ── "📊 Мой трекер" ────────────────────────────────────────────────────────
@@ -53,9 +67,10 @@ async def cmd_tracker(message: Message, state: FSMContext) -> None:
         await message.answer(
             "📊 <b>Мой трекер</b>\n\n"
             "У вас пока нет активных курсов.\n\n"
-            "Перейдите в <b>«💊 Подбор БАД»</b> и выберите продукт.",
+            "Перейдите в <b>«💊 Подбор БАД»</b> и выберите продукт, "
+            "или добавьте свой БАД вручную 👇",
             parse_mode="HTML",
-            reply_markup=main_menu(),
+            reply_markup=tracker_menu_keyboard(),
         )
         return
 
@@ -74,8 +89,9 @@ async def cmd_tracker(message: Message, state: FSMContext) -> None:
             f"   🔔 Напоминания: {remind}\n"
         )
 
-    lines.append("Для нового курса — <b>«💊 Подбор БАД»</b>.")
-    await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=main_menu())
+    lines.append("Для нового курса — «💊 Подбор БАД» или добавьте свой БАД 👇")
+    await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=tracker_menu_keyboard())
+    await message.answer("Выберите действие 👇", reply_markup=main_menu())
 
 
 def _reminder_label(rt1: str | None, rt2: str | None) -> str:
@@ -92,25 +108,105 @@ async def cb_track_start(call: CallbackQuery, state: FSMContext) -> None:
         await call.answer("Продукт не найден", show_alert=True)
         return
 
+    d = BAD_DETAILS[product_key]
     await state.clear()
-    await state.update_data(product_key=product_key)
+    await state.update_data(
+        product_key=product_key,
+        course_days=d.get("course_days", 30),
+        daily_doses=d.get("daily_doses", 1),
+        default_times=d.get("default_times", ["08:00"]),
+    )
 
-    # Check if timezone is already set
-    utc_offset = await get_utc_offset(call.from_user.id)
+    await _check_timezone_then_ask_time(call.message, state, call.from_user.id)
+    await call.answer()
+
+
+# ── Start tracking (custom, non-catalog БАД) ───────────────────────────────
+
+@router.callback_query(F.data == "track:custom")
+async def cb_track_custom(call: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(TrackerState.entering_custom_name)
+    await call.message.answer(
+        "💊 <b>Какой БАД хотите отслеживать?</b>\n"
+        "Напишите название — например, <i>«Железо хелат»</i> или «Омега-3»",
+        parse_mode="HTML",
+    )
+    await call.answer()
+
+
+@router.message(TrackerState.entering_custom_name)
+async def msg_custom_name(message: Message, state: FSMContext) -> None:
+    name = (message.text or "").strip()
+    if not (1 <= len(name) <= 100):
+        await message.answer("Название должно быть от 1 до 100 символов.")
+        return
+    await state.update_data(product_key=name)
+    await state.set_state(TrackerState.entering_custom_course_days)
+    await message.answer(
+        "📅 <b>На сколько дней рассчитан курс?</b>\nНапример: <code>30</code>",
+        parse_mode="HTML",
+    )
+
+
+# ── Start tracking (from a non-catalog AI recommendation) ─────────────────
+# Same flow as "➕ Другой БАД", but the name is already known — skip straight
+# to asking course length.
+
+@router.callback_query(F.data.startswith("track:customstart:"))
+async def cb_track_custom_start(call: CallbackQuery, state: FSMContext) -> None:
+    name = call.data.split(":", 2)[2]
+    await state.clear()
+    await state.update_data(product_key=name)
+    await state.set_state(TrackerState.entering_custom_course_days)
+    await call.message.answer(
+        f"📅 <b>На сколько дней рассчитан курс «{name}»?</b>\nНапример: <code>30</code>",
+        parse_mode="HTML",
+    )
+    await call.answer()
+
+
+@router.message(TrackerState.entering_custom_course_days)
+async def msg_custom_course_days(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if not text.isdigit() or not (1 <= int(text) <= 365):
+        await message.answer("⚠️ Введите число дней от 1 до 365, например <code>30</code>.", parse_mode="HTML")
+        return
+    await state.update_data(course_days=int(text))
+    await state.set_state(TrackerState.selecting_daily_doses)
+    await message.answer(
+        "🔢 <b>Сколько раз в день принимать?</b>",
+        parse_mode="HTML",
+        reply_markup=daily_doses_keyboard(),
+    )
+
+
+@router.callback_query(TrackerState.selecting_daily_doses, F.data.startswith("dailydoses:"))
+async def cb_daily_doses(call: CallbackQuery, state: FSMContext) -> None:
+    daily = int(call.data.split(":")[1])
+    default_times = ["08:00"] if daily == 1 else ["08:00", "20:00"]
+    await state.update_data(daily_doses=daily, default_times=default_times)
+    await call.message.edit_reply_markup(reply_markup=None)
+
+    await _check_timezone_then_ask_time(call.message, state, call.from_user.id)
+    await call.answer()
+
+
+# ── Timezone ───────────────────────────────────────────────────────────────
+
+async def _check_timezone_then_ask_time(message: Message, state: FSMContext, telegram_id: int) -> None:
+    utc_offset = await get_utc_offset(telegram_id)
     if utc_offset is None:
         await state.set_state(TrackerState.selecting_timezone)
-        await call.message.answer(
+        await message.answer(
             "🌍 <b>Сначала укажите ваш часовой пояс</b>\n\n"
             "Это нужно, чтобы напоминания приходили в нужное время.",
             parse_mode="HTML",
             reply_markup=timezone_keyboard(),
         )
     else:
-        await _ask_time_1(call.message, state, product_key)
-    await call.answer()
+        await _ask_time_1(message, state)
 
-
-# ── Timezone ───────────────────────────────────────────────────────────────
 
 @router.callback_query(TrackerState.selecting_timezone, F.data.startswith("tz:"))
 async def cb_timezone(call: CallbackQuery, state: FSMContext) -> None:
@@ -118,23 +214,21 @@ async def cb_timezone(call: CallbackQuery, state: FSMContext) -> None:
     await set_utc_offset(call.from_user.id, offset)
     await call.message.edit_reply_markup(reply_markup=None)
 
-    data = await state.get_data()
-    product_key = data.get("product_key", "")
-    await _ask_time_1(call.message, state, product_key)
+    await _ask_time_1(call.message, state)
     await call.answer()
 
 
 # ── Time selection ─────────────────────────────────────────────────────────
 
-async def _ask_time_1(message: Message, state: FSMContext, product_key: str) -> None:
-    d = BAD_DETAILS.get(product_key, {})
-    default = d.get("default_times", ["08:00"])[0]
-    daily = d.get("daily_doses", 1)
+async def _ask_time_1(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    default_times = data.get("default_times", ["08:00"])
+    daily = data.get("daily_doses", 1)
 
     await state.set_state(TrackerState.selecting_time_1)
     await message.answer(
         f"🔔 <b>Время {'первого ' if daily > 1 else ''}напоминания</b>\n\n"
-        f"Рекомендуем: <b>{default}</b>\n"
+        f"Рекомендуем: <b>{default_times[0]}</b>\n"
         "Выберите удобное время или напишите своё:",
         parse_mode="HTML",
         reply_markup=time_keyboard("time1"),
@@ -171,12 +265,11 @@ async def msg_custom_time_1(message: Message, state: FSMContext) -> None:
 
 async def _after_time_1(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
-    product_key = data.get("product_key", "")
-    d = BAD_DETAILS.get(product_key, {})
-    daily = d.get("daily_doses", 1)
+    daily = data.get("daily_doses", 1)
 
     if daily > 1:
-        default2 = d.get("default_times", ["08:00", "20:00"])[-1]
+        default_times = data.get("default_times", ["08:00", "20:00"])
+        default2 = default_times[-1]
         await state.set_state(TrackerState.selecting_time_2)
         await message.answer(
             f"🔔 <b>Время второго напоминания</b>\n\n"
@@ -218,7 +311,6 @@ async def msg_custom_time_2(message: Message, state: FSMContext) -> None:
 
 
 def _parse_time(text: str) -> str | None:
-    import re
     m = re.search(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", (text or "").strip())
     if m:
         return f"{int(m.group(1)):02d}:{m.group(2)}"
@@ -230,15 +322,14 @@ def _parse_time(text: str) -> str | None:
 async def _create_and_confirm(message: Message, state: FSMContext, time_2: str | None) -> None:
     data = await state.get_data()
     product_key = data.get("product_key", "")
+    course_days = data.get("course_days", 30)
     time_1 = data.get("time_1")
     await state.clear()
 
     user_id = await get_or_create_user(message.chat.id, None)
-    d = BAD_DETAILS.get(product_key, {})
-    course_days = d.get("course_days", 30)
-
     await create_tracking(user_id, product_key, course_days, time_1, time_2)
 
+    d = BAD_DETAILS.get(product_key, {})
     remind = _reminder_label(time_1, time_2)
     emoji = d.get("emoji", "💊")
     full_name = d.get("full_name", product_key)

@@ -129,12 +129,20 @@ def followup_keyboard(session_id: int) -> InlineKeyboardMarkup:
 
 # ── BAD advisor ───────────────────────────────────────────────────────────
 
-def bad_goals_keyboard() -> InlineKeyboardMarkup:
+def bad_goals_keyboard(suggested_keys: list[str] | None = None) -> InlineKeyboardMarkup:
     from data.resources import BAD_GOALS
+
+    suggested_keys = suggested_keys or []
+    ordered_keys = [k for k in suggested_keys if k in BAD_GOALS] + [
+        k for k in BAD_GOALS if k not in suggested_keys
+    ]
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=goal["label"], callback_data=f"badgoal:{key}")]
-            for key, goal in BAD_GOALS.items()
+            [InlineKeyboardButton(
+                text=("⭐ " if key in suggested_keys else "") + BAD_GOALS[key]["label"],
+                callback_data=f"badgoal:{key}",
+            )]
+            for key in ordered_keys
         ]
     )
 
@@ -145,6 +153,35 @@ def track_start_keyboard(product_key: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[[
             InlineKeyboardButton(text="🔔 Начать курс", callback_data=f"track:start:{product_key}"),
+        ]]
+    )
+
+
+def general_supplement_keyboard(name: str) -> InlineKeyboardMarkup:
+    """For AI recommendations outside our catalog — starts the custom-BAD
+    tracker flow pre-filled with this name (skips the "what's it called" step)."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[
+            InlineKeyboardButton(
+                text="🔔 Отслеживать приём", callback_data=f"track:customstart:{name[:40]}"
+            ),
+        ]]
+    )
+
+
+def tracker_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[
+            InlineKeyboardButton(text="➕ Другой БАД", callback_data="track:custom"),
+        ]]
+    )
+
+
+def daily_doses_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[
+            InlineKeyboardButton(text="1 раз в день", callback_data="dailydoses:1"),
+            InlineKeyboardButton(text="2 раза в день", callback_data="dailydoses:2"),
         ]]
     )
 
