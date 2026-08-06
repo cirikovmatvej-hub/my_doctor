@@ -595,8 +595,7 @@ def build_recommendation_message(ai_response: dict) -> str:
     if general_suggestion:
         parts += [
             "💊 <b>Может помочь:</b>",
-            f"{general_suggestion} — этого нет в нашем каталоге, но перед началом приёма "
-            "в любом случае посоветуйтесь с врачом.",
+            f"{general_suggestion} — перед началом приёма в любом случае посоветуйтесь с врачом.",
         ]
 
     return "\n".join(parts).strip()
