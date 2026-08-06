@@ -2,7 +2,8 @@
 BAD Advisor — goal-based supplement recommendation flow.
 
 Flow:
-  "💊 Подбор БАД" → goal selection → safety check → lifestyle tips → BAD card(s)
+  "💊 Подбор БАД" → goal selection → clarifying question (single-BAD goals only)
+  → safety check → lifestyle tips → BAD card(s)
   Each BAD card has a "🔔 Начать курс" button → handled by tracker.py
 """
 import logging
@@ -12,9 +13,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from data.bad_safety import check_bad_safety, get_bad_synergies, suggest_goal_keys
-from data.resources import BAD_DETAILS, BAD_GOALS, BADS, LIFESTYLE_TIPS
+from data.resources import BAD_DETAILS, BAD_GOALS, BADS, GOAL_CLARIFY_QUESTIONS, LIFESTYLE_TIPS
 from database.db import get_user_profile
-from keyboards.keyboards import bad_goals_keyboard, main_menu, track_start_keyboard
+from keyboards.keyboards import bad_goals_keyboard, goal_clarify_keyboard, main_menu, track_start_keyboard
 
 router = Router()
 
@@ -74,11 +75,41 @@ async def cb_goal_selected(call: CallbackQuery, state: FSMContext) -> None:
         await call.answer("Неизвестная цель", show_alert=True)
         return
 
-    await call.message.edit_text(
-        f"🎯 Цель: <b>{goal['label']}</b>",
-        parse_mode="HTML",
-    )
     await call.answer()
+
+    clarify = GOAL_CLARIFY_QUESTIONS.get(goal_key)
+    if clarify:
+        await call.message.edit_text(
+            f"🎯 Цель: <b>{goal['label']}</b>\n\n{clarify['question']}",
+            parse_mode="HTML",
+            reply_markup=goal_clarify_keyboard(goal_key, clarify["options"]),
+        )
+        return
+
+    await call.message.edit_text(f"🎯 Цель: <b>{goal['label']}</b>", parse_mode="HTML")
+    await _show_goal_recommendations(call, goal_key)
+
+
+@router.callback_query(F.data.startswith("badclarify:"))
+async def cb_clarify_answer(call: CallbackQuery, state: FSMContext) -> None:
+    _, goal_key, option_key = call.data.split(":")
+    goal = BAD_GOALS.get(goal_key)
+    clarify = GOAL_CLARIFY_QUESTIONS.get(goal_key)
+    if not goal or not clarify:
+        await call.answer("Неизвестная цель", show_alert=True)
+        return
+
+    await call.answer()
+    await call.message.edit_text(f"🎯 Цель: <b>{goal['label']}</b>", parse_mode="HTML")
+
+    extra_note = clarify["notes"].get(option_key)
+    await _show_goal_recommendations(call, goal_key, extra_note)
+
+
+async def _show_goal_recommendations(
+    call: CallbackQuery, goal_key: str, extra_note: str | None = None,
+) -> None:
+    goal = BAD_GOALS[goal_key]
 
     # Load health profile for safety check
     profile = await get_user_profile(call.from_user.id)
@@ -96,6 +127,9 @@ async def cb_goal_selected(call: CallbackQuery, state: FSMContext) -> None:
             "лучше проконсультироваться с врачом.</i>"
         )
         await call.message.answer(warning_text, parse_mode="HTML")
+
+    if extra_note:
+        await call.message.answer(f"💬 {extra_note}", parse_mode="HTML")
 
     # ── Lifestyle tips first ───────────────────────────────────────────────
     tips = LIFESTYLE_TIPS.get(goal_key, "")

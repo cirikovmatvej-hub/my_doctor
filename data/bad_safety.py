@@ -232,6 +232,41 @@ INTERACTION_RULES: list[dict] = [
 ]
 
 
+# ── Indication grounding for bad_recommendation ─────────────────────────────
+# A deterministic backstop against the model inventing a match (e.g. "magnesium
+# helps digestion") that isn't actually one of the product's real indications —
+# checked against the user's own words, not the model's paraphrase of them.
+# Generous/loose on purpose: a false negative here silently drops a valid
+# recommendation, which is a much smaller harm than a false positive
+# (force-fitting an unrelated product), so terms err toward over-inclusion.
+
+INDICATION_TERMS: dict[str, list[str]] = {
+    "magnesium": [
+        "сон", "сплю", "спать", "уснуть", "бессонниц", "стресс", "тревож",
+        "раздражит", "нервн", "мышечн", "спазм", "судорог", "напряжен",
+        "расслаб",
+    ],
+    "vitamin_d3": [
+        "иммунит", "устал", "слаб", "простуд", "болею", "тонус", "энерги",
+        "настроен", "депресс", "витамин d", "кост", "апати",
+    ],
+    "collagen": [
+        "кожа", "кожи", "кож", "волос", "ногт", "сустав", "морщин", "упруг",
+        "колен", "локт",
+    ],
+}
+
+
+def is_bad_recommendation_grounded(bad_key: str, complaint_text: str) -> bool:
+    """Does the user's own complaint plausibly mention one of bad_key's real
+    indications? True (pass-through) for unknown keys — nothing to validate."""
+    terms = INDICATION_TERMS.get(bad_key)
+    if not terms:
+        return True
+    haystack = _normalize(complaint_text)
+    return any(_term_matches(term, haystack) for term in terms)
+
+
 # ── Synergy rules ────────────────────────────────────────────────────────────
 # Positive complementary-nutrient notes — separate from INTERACTION_RULES
 # because these are "works better together" facts, not safety concerns.

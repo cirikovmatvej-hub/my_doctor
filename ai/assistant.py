@@ -49,9 +49,15 @@ doctor_specialty — ОБЯЗАТЕЛЬНО, одно из:
 bad_recommendation — ТОЛЬКО при lifestyle-проблемах (не при острых медицинских состояниях),
 и ТОЛЬКО через инструменты (не по памяти):
   1. Вызови list_bads_catalog — узнай, какие БАД реально есть в каталоге и от чего они.
-  2. Если по показаниям подходит один из них — вызови check_bad_safety(bad_key) для
-     ЭТОГО пациента, чтобы проверить противопоказания и взаимодействия с его профилем.
-  3. Если check_bad_safety вернул warnings с kind="contraindication" — НЕ указывай этот
+  2. Сравни жалобу пользователя ТОЛЬКО с полями goal/notes, которые вернул list_bads_catalog.
+     НЕ придумывай дополнительных показаний и механизмов, которых там нет — например,
+     если пользователь жалуется на вздутие живота/пищеварение, а в goal/notes магния
+     об этом ни слова, значит магний НЕ подходит, даже если кажется, что "расслабление"
+     могло бы теоретически помочь. Сомневаешься, подходит ли явно — считай, что не подходит.
+  3. Если по показаниям (буквально из goal/notes) подходит один из них — вызови
+     check_bad_safety(bad_key) для ЭТОГО пациента, чтобы проверить противопоказания и
+     взаимодействия с его профилем.
+  4. Если check_bad_safety вернул warnings с kind="contraindication" — НЕ указывай этот
      bad_recommendation, вместо этого упомяни риск в тексте ответа и направь к врачу.
      В этом случае НЕ переноси тот же продукт в general_supplement_suggestion — это поле
      только для добавок, которых НЕТ в нашем каталоге, а не для замены заблокированной
@@ -77,6 +83,8 @@ is_lifestyle — true если это проблема образа жизни/�
 - Не давай психиатрических советов — только направляй к специалисту
 - Один вопрос за раз
 - Простой русский язык, тёплый тон, сообщения до 3 абзацев
+- Не преувеличивай эффект БАД — формулируй как "может помочь", "часто используется как поддержка",
+  а не как гарантированное решение проблемы
 
 ДЛЯ ТИПА RECOMMENDATION — текст должен содержать:
   Если is_lifestyle=false: конкретные советы "чего НЕ делать" до визита к врачу
@@ -284,6 +292,51 @@ async def _run_tool_loop(
         raise ValueError(f"Model response was not valid JSON: {msg.content!r}")
 
     bad_key = parsed.get("bad_recommendation")
+
+    if bad_key:
+        from data.bad_safety import is_bad_recommendation_grounded
+        complaint_text = " ".join(
+            m["content"] for m in chat_messages
+            if m.get("role") == "user" and isinstance(m.get("content"), str)
+        )
+        if not is_bad_recommendation_grounded(bad_key, complaint_text):
+            logging.warning(f"Ungrounded bad_recommendation={bad_key!r} for {complaint_text!r}, asking for a rewrite")
+            # Dropping just the structured field isn't enough — the model's own
+            # `text` usually still repeats the invented claim ("magnesium helps
+            # digestion"). Ask it to rewrite rather than silently truncate.
+            chat_messages.append({"role": "assistant", "content": json.dumps(parsed, ensure_ascii=False)})
+            chat_messages.append({
+                "role": "user",
+                "content": (
+                    f"Проверка показала: '{bad_key}' на самом деле не входит в реальные "
+                    f"показания этого БАД (goal/notes из list_bads_catalog) для описанной "
+                    f"жалобы — не придумывай механизм, которого там нет. Перепиши ответ: "
+                    f"НЕ упоминай {bad_key} и не утверждай, что он поможет при этой жалобе "
+                    f"(ни в bad_recommendation, ни в тексте). Если для жалобы подходит другая "
+                    f"добавка не из нашего каталога — укажи её в general_supplement_suggestion, "
+                    f"иначе оставь оба поля null. Ответь тем же JSON-форматом, без вызова инструментов."
+                ),
+            })
+            correction_kwargs = dict(
+                model=model, messages=chat_messages,
+                response_format={"type": "json_object"},
+                temperature=0.3, max_tokens=max_tokens,
+            )
+            if extra_body:
+                correction_kwargs["extra_body"] = extra_body
+            response = await client.chat.completions.create(**correction_kwargs)
+            corrected = _extract_json(response.choices[0].message.content or "")
+            if corrected is not None:
+                parsed = corrected
+                bad_key = parsed.get("bad_recommendation")
+                if bad_key and not is_bad_recommendation_grounded(bad_key, complaint_text):
+                    logging.warning(f"Rewrite still ungrounded ({bad_key!r}) — dropping the field")
+                    parsed["bad_recommendation"] = None
+                    bad_key = None
+            else:
+                parsed["bad_recommendation"] = None
+                bad_key = None
+
     safety = safety_results.get(bad_key) if bad_key else None
     if safety and safety["warnings"]:
         parsed["_grounded_safety_warnings"] = [w["message"] for w in safety["warnings"]]
@@ -333,6 +386,7 @@ PHOTO_PROMPT = """Ты медицинский ассистент. Пользов
 - Простой язык без латинских терминов (или с расшифровкой в скобках)
 - Если фото нечёткое или не является медицинским документом — честно скажи об этом
 - Ответ — 2–4 коротких абзаца
+- Не преувеличивай эффект БАД — формулируй как "может помочь", а не как гарантированное решение
 
 BAD-рекомендации (только при явных показаниях, и только если это реально один из НАШИХ БАД):
   magnesium   → дефицит магния, нарушения сна, стресс, мышечные спазмы

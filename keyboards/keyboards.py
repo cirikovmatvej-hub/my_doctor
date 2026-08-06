@@ -147,6 +147,15 @@ def bad_goals_keyboard(suggested_keys: list[str] | None = None) -> InlineKeyboar
     )
 
 
+def goal_clarify_keyboard(goal_key: str, options: list[tuple[str, str]]) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=label, callback_data=f"badclarify:{goal_key}:{option_key}")]
+            for option_key, label in options
+        ]
+    )
+
+
 # ── Tracker ───────────────────────────────────────────────────────────────
 
 def track_start_keyboard(product_key: str) -> InlineKeyboardMarkup:
