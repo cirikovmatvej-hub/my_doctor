@@ -241,16 +241,22 @@ INTERACTION_RULES: list[dict] = [
 # (force-fitting an unrelated product), so terms err toward over-inclusion.
 
 INDICATION_TERMS: dict[str, list[str]] = {
+    # Product/ingredient names go first — a user asking about the product by
+    # name (e.g. "какой магний лучше, хелат или цитрат") is always grounded,
+    # even more so than a symptom-term match.
     "magnesium": [
+        "магний", "хелат",
         "сон", "сплю", "спать", "уснуть", "бессонниц", "стресс", "тревож",
         "раздражит", "нервн", "мышечн", "спазм", "судорог", "напряжен",
         "расслаб",
     ],
     "vitamin_d3": [
+        "витамин d", "витамин д", "д3",
         "иммунит", "устал", "слаб", "простуд", "болею", "тонус", "энерги",
-        "настроен", "депресс", "витамин d", "кост", "апати",
+        "настроен", "депресс", "кост", "апати",
     ],
     "collagen": [
+        "коллаген",
         "кожа", "кожи", "кож", "волос", "ногт", "сустав", "морщин", "упруг",
         "колен", "локт",
     ],

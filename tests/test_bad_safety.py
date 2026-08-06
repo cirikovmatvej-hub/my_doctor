@@ -16,6 +16,7 @@ from data.bad_safety import (
     SYNERGY_RULES,
     check_bad_safety,
     get_bad_synergies,
+    is_bad_recommendation_grounded,
     suggest_goal_keys,
 )
 
@@ -150,3 +151,32 @@ def test_unrelated_condition_suggests_nothing():
 def test_empty_or_missing_profile_suggests_nothing():
     assert suggest_goal_keys(None) == []
     assert suggest_goal_keys({}) == []
+
+
+# ── bad_recommendation grounding (anti-force-fit guard) ─────────────────────
+
+def test_asking_about_product_by_name_is_always_grounded():
+    # Regression: a user asking "какой магний лучше, хелат или цитрат" was
+    # incorrectly blocked because the term list only covered symptoms, not
+    # the product's own name — naming the product is the strongest possible
+    # signal of relevance.
+    assert is_bad_recommendation_grounded(
+        "magnesium", "Я хочу разобраться, какой магний мне лучше пить, хелат или цитрат"
+    )
+    assert is_bad_recommendation_grounded("vitamin_d3", "Стоит ли мне пить витамин Д зимой?")
+    assert is_bad_recommendation_grounded("collagen", "Слышала про коллаген для кожи, стоит ли попробовать?")
+
+
+def test_unrelated_complaint_is_not_grounded():
+    assert not is_bad_recommendation_grounded(
+        "magnesium", "Постоянное вздутие живота и плохое пищеварение после еды"
+    )
+
+
+def test_short_word_fuzzy_false_positive_does_not_recur():
+    # Regression: "со" (preposition) used to fuzzy-match "сон" at 0.8 ratio,
+    # letting magnesium through for an unrelated diarrhea+fever complaint.
+    assert not is_bad_recommendation_grounded(
+        "magnesium",
+        "диарея длится уже три дня, со вчерашнего дня поднялась температура",
+    )
