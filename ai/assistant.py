@@ -92,6 +92,8 @@ is_lifestyle — true если это проблема образа жизни/�
 - Не давай психиатрических советов — только направляй к специалисту
 - Один вопрос за раз
 - Простой русский язык, тёплый тон, сообщения до 3 абзацев
+- Пиши ТОЛЬКО на русском — ни одного слова на английском (не "meantime", не "please" и
+  т.п.), даже случайно затесавшегося посреди русского предложения
 - Не преувеличивай эффект БАД — формулируй как "может помочь", "часто используется как поддержка",
   а не как гарантированное решение проблемы
 
@@ -201,6 +203,14 @@ def _build_system(
 
 MAX_TOOL_ROUNDS = 3
 
+_ENGLISH_WORD_RE = re.compile(r"\b[a-zA-Z]{3,}\b")
+
+
+def _contains_stray_english(text: str) -> bool:
+    """The 'пиши только на русском' prompt rule alone isn't reliably followed —
+    this is a deterministic backstop, same pattern as bad_recommendation grounding."""
+    return bool(_ENGLISH_WORD_RE.search(text or ""))
+
 
 async def _run_tool_loop(
     chat_messages: list[dict],
@@ -300,6 +310,22 @@ async def _run_tool_loop(
     if parsed is None:
         raise ValueError(f"Model response was not valid JSON: {msg.content!r}")
 
+    async def _ask_for_rewrite(instruction: str) -> dict | None:
+        """Ask the model to rewrite its last JSON answer with a corrective
+        instruction — used when a deterministic check catches something prompt
+        instructions alone didn't reliably prevent."""
+        chat_messages.append({"role": "assistant", "content": json.dumps(parsed, ensure_ascii=False)})
+        chat_messages.append({"role": "user", "content": instruction})
+        rewrite_kwargs = dict(
+            model=model, messages=chat_messages,
+            response_format={"type": "json_object"},
+            temperature=0.3, max_tokens=max_tokens,
+        )
+        if extra_body:
+            rewrite_kwargs["extra_body"] = extra_body
+        response = await client.chat.completions.create(**rewrite_kwargs)
+        return _extract_json(response.choices[0].message.content or "")
+
     bad_key = parsed.get("bad_recommendation")
 
     if bad_key:
@@ -313,28 +339,15 @@ async def _run_tool_loop(
             # Dropping just the structured field isn't enough — the model's own
             # `text` usually still repeats the invented claim ("magnesium helps
             # digestion"). Ask it to rewrite rather than silently truncate.
-            chat_messages.append({"role": "assistant", "content": json.dumps(parsed, ensure_ascii=False)})
-            chat_messages.append({
-                "role": "user",
-                "content": (
-                    f"Проверка показала: '{bad_key}' на самом деле не входит в реальные "
-                    f"показания этого БАД (goal/notes из list_bads_catalog) для описанной "
-                    f"жалобы — не придумывай механизм, которого там нет. Перепиши ответ: "
-                    f"НЕ упоминай {bad_key} и не утверждай, что он поможет при этой жалобе "
-                    f"(ни в bad_recommendation, ни в тексте). Если для жалобы подходит другая "
-                    f"добавка не из нашего каталога — укажи её в general_supplement_suggestion, "
-                    f"иначе оставь оба поля null. Ответь тем же JSON-форматом, без вызова инструментов."
-                ),
-            })
-            correction_kwargs = dict(
-                model=model, messages=chat_messages,
-                response_format={"type": "json_object"},
-                temperature=0.3, max_tokens=max_tokens,
+            corrected = await _ask_for_rewrite(
+                f"Проверка показала: '{bad_key}' на самом деле не входит в реальные "
+                f"показания этого БАД (goal/notes из list_bads_catalog) для описанной "
+                f"жалобы — не придумывай механизм, которого там нет. Перепиши ответ: "
+                f"НЕ упоминай {bad_key} и не утверждай, что он поможет при этой жалобе "
+                f"(ни в bad_recommendation, ни в тексте). Если для жалобы подходит другая "
+                f"добавка не из нашего каталога — укажи её в general_supplement_suggestion, "
+                f"иначе оставь оба поля null. Ответь тем же JSON-форматом, без вызова инструментов."
             )
-            if extra_body:
-                correction_kwargs["extra_body"] = extra_body
-            response = await client.chat.completions.create(**correction_kwargs)
-            corrected = _extract_json(response.choices[0].message.content or "")
             if corrected is not None:
                 parsed = corrected
                 bad_key = parsed.get("bad_recommendation")
@@ -345,6 +358,17 @@ async def _run_tool_loop(
             else:
                 parsed["bad_recommendation"] = None
                 bad_key = None
+
+    if _contains_stray_english(parsed.get("text", "")):
+        logging.warning(f"Stray English in response, asking for a rewrite: {parsed.get('text')!r}")
+        corrected = await _ask_for_rewrite(
+            "В твоём ответе есть слово(-а) на английском языке (например, случайно "
+            "затесавшееся 'meantime'). Перепиши ВЕСЬ ответ полностью на русском, без "
+            "единого английского слова. Ответь тем же JSON-форматом, без вызова инструментов."
+        )
+        if corrected is not None:
+            parsed = corrected
+            bad_key = parsed.get("bad_recommendation")
 
     safety = safety_results.get(bad_key) if bad_key else None
     if safety and safety["warnings"]:
@@ -393,6 +417,8 @@ PHOTO_PROMPT = """Ты медицинский ассистент. Пользов
 ПРАВИЛА:
 - Никогда не ставь диагноз — только "возможно", "может указывать"
 - Простой язык без латинских терминов (или с расшифровкой в скобках)
+- Пиши ТОЛЬКО на русском — ни одного английского слова, даже случайно затесавшегося
+  посреди русского предложения
 - Если фото нечёткое или не является медицинским документом — честно скажи об этом
 - Ответ — 2–4 коротких абзаца
 - Не преувеличивай эффект БАД — формулируй как "может помочь", а не как гарантированное решение
