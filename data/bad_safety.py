@@ -404,11 +404,17 @@ def _normalize(text: str) -> str:
     return text.lower().replace("ё", "е").strip()
 
 
+_FUZZY_MIN_TERM_LEN = 5  # below this, fuzzy matching false-positives on short/common
+                          # words (e.g. "сон" ~ "со") became more likely than typos
+
+
 def _term_matches(term: str, haystack_text: str) -> bool:
     if not haystack_text:
         return False
     if term in haystack_text:
         return True
+    if len(term) < _FUZZY_MIN_TERM_LEN:
+        return False
     words = haystack_text.split()
     return any(difflib.SequenceMatcher(None, term, w).ratio() > 0.75 for w in words)
 
