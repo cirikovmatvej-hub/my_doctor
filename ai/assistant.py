@@ -4,7 +4,7 @@ import re
 
 from openai import AsyncOpenAI
 
-from config import GROQ_API_KEY, MAX_QUESTIONS
+from config import GROQ_API_KEY, MAX_QUESTIONS, SHOW_DOCTOR_RECOMMENDATIONS
 from data.resources import DOCTORS, BADS
 
 # Groq — бесплатный API, совместимый с OpenAI
@@ -509,7 +509,7 @@ def build_recommendation_message(ai_response: dict) -> str:
     parts = [ai_response["text"], ""]
 
     doctor_key = ai_response.get("doctor_specialty")
-    if doctor_key and doctor_key in DOCTORS:
+    if SHOW_DOCTOR_RECOMMENDATIONS and doctor_key and doctor_key in DOCTORS:
         d = DOCTORS[doctor_key]
         parts += [
             "🏥 <b>Запись к врачу:</b>",

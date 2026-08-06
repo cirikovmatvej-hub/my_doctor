@@ -11,6 +11,11 @@ DATABASE_PATH: str = os.getenv("DATABASE_PATH", "doctor_bot.db")
 FOLLOW_UP_HOURS: float = float(os.getenv("FOLLOW_UP_HOURS", "72"))   # 3 дня по умолчанию
 APPOINTMENT_ASK_HOURS: float = float(os.getenv("APPOINTMENT_ASK_HOURS", "2"))  # через сколько спросить "записались?"
 
+# Временно отключено — фокус сейчас на подборе БАД, а не на рекомендациях врача.
+# Логика (doctor_specialty, ссылки, follow-up) остаётся в коде нетронутой,
+# просто не показывается/не планируется, пока флаг False.
+SHOW_DOCTOR_RECOMMENDATIONS: bool = os.getenv("SHOW_DOCTOR_RECOMMENDATIONS", "false").lower() == "true"
+
 # ── iOS API ──────────────────────────────────────────────────────────────────
 API_JWT_SECRET: str = os.getenv("API_JWT_SECRET", "")
 APPLE_BUNDLE_ID: str = os.getenv("APPLE_BUNDLE_ID", "")

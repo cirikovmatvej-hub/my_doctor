@@ -18,7 +18,7 @@ from ai.assistant import (
     analyze_symptoms, analyze_photo, analyze_lab_text,
     build_recommendation_message, AGE_RU, GENDER_RU,
 )
-from config import MAX_QUESTIONS
+from config import MAX_QUESTIONS, SHOW_DOCTOR_RECOMMENDATIONS
 from database.db import (
     add_message,
     create_session,
@@ -227,7 +227,7 @@ async def handle_symptom(message: Message, state: FSMContext) -> None:
     summary = f"[{_profile_line(gender, age_range)}] {(ai.get('text') or '')[:480]}"
     await update_session_summary(session_id, summary)
 
-    if ai.get("doctor_specialty"):
+    if SHOW_DOCTOR_RECOMMENDATIONS and ai.get("doctor_specialty"):
         owner_id = await get_or_create_user(message.from_user.id, message.from_user.username)
         await schedule_appointment_followup(owner_id, ai["doctor_specialty"])
 
@@ -279,8 +279,9 @@ async def _process_photo(message: Message, state: FSMContext) -> None:
 
     final_text = build_recommendation_message(ai)
 
-    owner_id = await get_or_create_user(message.from_user.id, message.from_user.username)
-    await schedule_appointment_followup(owner_id, ai["doctor_specialty"])
+    if SHOW_DOCTOR_RECOMMENDATIONS:
+        owner_id = await get_or_create_user(message.from_user.id, message.from_user.username)
+        await schedule_appointment_followup(owner_id, ai["doctor_specialty"])
 
     await state.clear()
     keyboard = _bad_tracking_keyboard(ai)
@@ -365,8 +366,9 @@ async def _process_pdf(message: Message, state: FSMContext) -> None:
 
     final_text = build_recommendation_message(ai)
 
-    owner_id = await get_or_create_user(message.from_user.id, message.from_user.username)
-    await schedule_appointment_followup(owner_id, ai["doctor_specialty"])
+    if SHOW_DOCTOR_RECOMMENDATIONS:
+        owner_id = await get_or_create_user(message.from_user.id, message.from_user.username)
+        await schedule_appointment_followup(owner_id, ai["doctor_specialty"])
 
     await state.clear()
     keyboard = _bad_tracking_keyboard(ai)
