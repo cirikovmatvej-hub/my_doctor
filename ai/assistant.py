@@ -88,6 +88,12 @@ bad_recommendation — ТОЛЬКО при lifestyle-проблемах (не п
      каталоге — general_supplement_suggestion как раз для этого. Не оставляй пользователя
      с одним лишь "обратитесь к врачу" без содержательной догадки, если она у тебя есть —
      это не диагноз, а полезный ориентир, который врачу тоже пригодится.
+     ВАЖНО: в тексте для такого многосимптомного случая НЕ упоминай ни магний, ни
+     коллаген, ни витамин D3 (наши 3 продукта) вообще, даже вскользь ("коллаген может
+     помочь с..."), даже если bad_recommendation=null — пользователь читает это как
+     рекомендацию независимо от того, что в структурированном поле. Раз bad_recommendation
+     здесь null, значит ни один из наших продуктов не подходит — молчи о них и говори
+     только о честной гипотезе (как цинк) или ничего не называй, если гипотезы нет.
   1. Вызови list_bads_catalog — узнай, какие БАД реально есть в каталоге и от чего они.
   2. Сравни жалобу пользователя ТОЛЬКО с полями goal/notes, которые вернул list_bads_catalog.
      НЕ придумывай дополнительных показаний и механизмов, которых там нет — например,
@@ -371,12 +377,13 @@ async def _run_tool_loop(
 
     bad_key = parsed.get("bad_recommendation")
 
+    complaint_text = " ".join(
+        m["content"] for m in chat_messages
+        if m.get("role") == "user" and isinstance(m.get("content"), str)
+    )
+
     if bad_key:
         from data.bad_safety import is_bad_recommendation_grounded
-        complaint_text = " ".join(
-            m["content"] for m in chat_messages
-            if m.get("role") == "user" and isinstance(m.get("content"), str)
-        )
         if not is_bad_recommendation_grounded(bad_key, complaint_text):
             logging.warning(f"Ungrounded bad_recommendation={bad_key!r} for {complaint_text!r}, asking for a rewrite")
             # Dropping just the structured field isn't enough — the model's own
@@ -427,6 +434,31 @@ async def _run_tool_loop(
             if corrected is not None:
                 parsed = corrected
                 bad_key = parsed.get("bad_recommendation")
+
+    # Even when bad_recommendation correctly ended up null for a complex
+    # multi-symptom complaint, the model's free-text `text` sometimes still
+    # name-drops one of our own products ("коллаген может помочь с...") as an
+    # aside — the user reads that as a recommendation regardless of what the
+    # structured field says. Verified live (worked ~5/6 of the time on prompt
+    # instruction alone, but the 1/6 miss is exactly this confusing case).
+    from data.bad_safety import count_matched_indication_categories, mentions_a_product_by_name
+    if (
+        not bad_key
+        and count_matched_indication_categories(complaint_text) >= 2
+        and mentions_a_product_by_name(parsed.get("text", ""))
+    ):
+        logging.warning(f"Text names a catalog product despite bad_recommendation=None, asking for a rewrite: {parsed.get('text')!r}")
+        corrected = await _ask_for_rewrite(
+            "В тексте твоего ответа упомянут один из НАШИХ продуктов (магний/коллаген/"
+            "витамин D3), хотя bad_recommendation=null — то есть ни один из них на самом "
+            "деле не подходит для этой многосимптомной картины. Перепиши текст БЕЗ "
+            "упоминания этих продуктов, даже вскользь — оставь только честную гипотезу "
+            "(если она есть, через general_supplement_suggestion) и направление к врачу. "
+            "Ответь тем же JSON-форматом, без вызова инструментов."
+        )
+        if corrected is not None:
+            parsed = corrected
+            bad_key = parsed.get("bad_recommendation")
 
     if _contains_stray_english(parsed.get("text", "")):
         logging.warning(f"Stray English in response, asking for a rewrite: {parsed.get('text')!r}")
