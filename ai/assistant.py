@@ -243,6 +243,7 @@ async def _run_tool_loop(
     `content`, so thinking models need a bigger budget than plain text models.
     """
     from ai.tools import TOOL_SCHEMAS, execute_tool
+    from data.bad_safety import mentions_a_product_by_name
 
     extra_body = {"reasoning_format": reasoning_format} if reasoning_format else None
 
@@ -251,11 +252,22 @@ async def _run_tool_loop(
     # of trusting the model to relay them in its free-text answer.
     safety_results: dict[str, dict] = {}
 
+    # The model doesn't reliably call list_bads_catalog on prompt instruction
+    # alone for informational questions ("когда лучше принимать d3?" — verified
+    # live) — force a tool call on the first round when the user names one of
+    # our products directly, instead of trusting it to decide to look it up.
+    user_text = " ".join(
+        m["content"] for m in chat_messages
+        if m.get("role") == "user" and isinstance(m.get("content"), str)
+    )
+    force_first_tool_call = mentions_a_product_by_name(user_text)
+
     msg = None
-    for _ in range(MAX_TOOL_ROUNDS):
+    for round_num in range(MAX_TOOL_ROUNDS):
         kwargs = dict(
             model=model, messages=chat_messages,
-            tools=TOOL_SCHEMAS, tool_choice="auto",
+            tools=TOOL_SCHEMAS,
+            tool_choice="required" if (round_num == 0 and force_first_tool_call) else "auto",
             temperature=0.3, max_tokens=max_tokens,
         )
         if extra_body:

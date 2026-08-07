@@ -240,27 +240,48 @@ INTERACTION_RULES: list[dict] = [
 # recommendation, which is a much smaller harm than a false positive
 # (force-fitting an unrelated product), so terms err toward over-inclusion.
 
-INDICATION_TERMS: dict[str, list[str]] = {
-    # Product/ingredient names go first — a user asking about the product by
-    # name (e.g. "какой магний лучше, хелат или цитрат") is always grounded,
-    # even more so than a symptom-term match.
+# Product/ingredient names — a user asking about the product by name (e.g.
+# "какой магний лучше, хелат или цитрат") is always grounded, even more so
+# than a symptom-term match. Also used to force tool-calling in ai/assistant.py
+# for informational questions, since the model doesn't reliably call
+# list_bads_catalog on prompt instruction alone (verified live).
+PRODUCT_NAME_TERMS: dict[str, list[str]] = {
+    "magnesium": ["магний", "хелат"],
+    "vitamin_d3": ["витамин d", "витамин д", "д3"],
+    "collagen": ["коллаген"],
+}
+
+_SYMPTOM_TERMS: dict[str, list[str]] = {
     "magnesium": [
-        "магний", "хелат",
         "сон", "сплю", "спать", "уснуть", "бессонниц", "стресс", "тревож",
         "раздражит", "нервн", "мышечн", "спазм", "судорог", "напряжен",
         "расслаб",
     ],
     "vitamin_d3": [
-        "витамин d", "витамин д", "д3",
         "иммунит", "устал", "слаб", "простуд", "болею", "тонус", "энерги",
         "настроен", "депресс", "кост", "апати",
     ],
     "collagen": [
-        "коллаген",
         "кожа", "кожи", "кож", "волос", "ногт", "сустав", "морщин", "упруг",
         "колен", "локт",
     ],
 }
+
+INDICATION_TERMS: dict[str, list[str]] = {
+    key: PRODUCT_NAME_TERMS[key] + _SYMPTOM_TERMS[key] for key in _SYMPTOM_TERMS
+}
+
+
+def mentions_a_product_by_name(complaint_text: str) -> bool:
+    """Does the text name one of our products/ingredients directly? Used to
+    force tool-calling for informational questions ("когда лучше принимать d3")
+    that a prompt instruction alone doesn't reliably trigger."""
+    haystack = _normalize(complaint_text)
+    return any(
+        _term_matches(term, haystack)
+        for terms in PRODUCT_NAME_TERMS.values()
+        for term in terms
+    )
 
 
 def is_bad_recommendation_grounded(bad_key: str, complaint_text: str) -> bool:
