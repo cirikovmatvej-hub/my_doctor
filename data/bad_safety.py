@@ -258,8 +258,8 @@ _SYMPTOM_TERMS: dict[str, list[str]] = {
         "расслаб",
     ],
     "vitamin_d3": [
-        "иммунит", "устал", "слаб", "простуд", "болею", "тонус", "энерги",
-        "настроен", "депресс", "кост", "апати",
+        "иммунит", "устал", "слаб", "простуд", "простужа", "болею", "тонус",
+        "энерги", "настроен", "депресс", "кост", "апати",
     ],
     "collagen": [
         "кожа", "кожи", "кож", "волос", "ногт", "сустав", "морщин", "упруг",
@@ -272,13 +272,36 @@ INDICATION_TERMS: dict[str, list[str]] = {
 }
 
 
+# Deliberately exact-substring only, no fuzzy fallback — unlike the rare
+# medical stems in CONDITIONS/MEDICATIONS (where typo-tolerance is worth the
+# risk), these are common everyday words, and fuzzy matching on short common
+# words kept producing false positives ("со" ~ "сон" at 0.8, "стала" ~ "устал"
+# at 0.8) that let an ungrounded BAD recommendation slip through.
+def _indication_term_matches(term: str, haystack: str) -> bool:
+    return term in haystack
+
+
+def count_matched_indication_categories(complaint_text: str) -> int:
+    """How many DIFFERENT products' indication terms appear in this complaint?
+    A precise proxy for "touches several unrelated body systems" — unlike raw
+    word count, this doesn't false-positive on a long but single-topic
+    complaint (e.g. a detailed description of only sleep/stress), and doesn't
+    require guessing at symptoms outside our own three products' domains."""
+    haystack = _normalize(complaint_text)
+    return sum(
+        1
+        for terms in INDICATION_TERMS.values()
+        if any(_indication_term_matches(term, haystack) for term in terms)
+    )
+
+
 def mentions_a_product_by_name(complaint_text: str) -> bool:
     """Does the text name one of our products/ingredients directly? Used to
     force tool-calling for informational questions ("когда лучше принимать d3")
     that a prompt instruction alone doesn't reliably trigger."""
     haystack = _normalize(complaint_text)
     return any(
-        _term_matches(term, haystack)
+        _indication_term_matches(term, haystack)
         for terms in PRODUCT_NAME_TERMS.values()
         for term in terms
     )
@@ -291,7 +314,7 @@ def is_bad_recommendation_grounded(bad_key: str, complaint_text: str) -> bool:
     if not terms:
         return True
     haystack = _normalize(complaint_text)
-    return any(_term_matches(term, haystack) for term in terms)
+    return any(_indication_term_matches(term, haystack) for term in terms)
 
 
 # ── Synergy rules ────────────────────────────────────────────────────────────

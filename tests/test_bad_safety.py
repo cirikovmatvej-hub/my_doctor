@@ -15,6 +15,7 @@ from data.bad_safety import (
     MEDICATIONS,
     SYNERGY_RULES,
     check_bad_safety,
+    count_matched_indication_categories,
     get_bad_synergies,
     is_bad_recommendation_grounded,
     suggest_goal_keys,
@@ -180,3 +181,36 @@ def test_short_word_fuzzy_false_positive_does_not_recur():
         "magnesium",
         "диарея длится уже три дня, со вчерашнего дня поднялась температура",
     )
+
+
+def test_common_word_fuzzy_false_positive_does_not_recur():
+    # Regression: "стала" (as in "кожа стала сухой") used to fuzzy-match
+    # "устал" at 0.8 ratio, which would have counted an extra (wrong) matched
+    # category for a plain skin complaint.
+    assert count_matched_indication_categories("Кожа стала сухой и дряблой, появились морщины.") == 1
+
+
+# ── Multi-symptom complexity signal (second-opinion guard trigger) ──────────
+
+def test_single_topic_complaint_touches_one_category():
+    # Long but single-topic (sleep/stress) — must NOT look "complex".
+    complaint = (
+        "Уже несколько недель очень плохо сплю: подолгу не могу уснуть, часто "
+        "просыпаюсь посреди ночи, а утром чувствую себя разбитым. Днём на работе "
+        "сильный стресс, постоянно на нервах, раздражаюсь по мелочам."
+    )
+    assert count_matched_indication_categories(complaint) == 1
+
+
+def test_multi_system_complaint_touches_multiple_categories():
+    # The real-world case that prompted this guard: taste/smell loss + hair
+    # loss + skin issues + poor wound healing + appetite + frequent colds —
+    # classic multi-system picture (zinc deficiency), not a single lifestyle
+    # complaint any one of our 3 products actually covers.
+    complaint = (
+        "Последние пару месяцев почти перестал нормально чувствовать вкус еды, "
+        "запахи тоже ощущаю намного слабее. Одновременно начали сильно выпадать "
+        "волосы, на коже периодически появляются раздражения. Даже обычные порезы "
+        "заживают очень долго. Аппетит стал хуже, и я начал чаще болеть простудами."
+    )
+    assert count_matched_indication_categories(complaint) >= 2

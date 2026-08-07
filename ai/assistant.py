@@ -68,6 +68,16 @@ doctor_specialty — ОБЯЗАТЕЛЬНО, одно из:
 
 bad_recommendation — ТОЛЬКО при lifestyle-проблемах (не при острых медицинских состояниях),
 и ТОЛЬКО через инструменты (не по памяти):
+  0. Если жалоба — это НЕСКОЛЬКО разных симптомов из разных систем организма сразу
+     (например: вкус/запах + выпадение волос + кожные высыпания + плохое заживление
+     ран + аппетит + частые простуды — всё вместе), особенно если это нарастает со
+     временем — НЕ хватайся за БАД из-за случайного совпадения одного слова с одним
+     из симптомов. Такая картина обычно требует очной диагностики. В этом случае
+     bad_recommendation и general_supplement_suggestion оставь null, is_lifestyle=false,
+     и прямо скажи в тексте, что с таким набором симптомов вместе лучше показаться
+     врачу, а не пытаться закрыть это одной добавкой. bad_recommendation подходит
+     только для простой, изолированной lifestyle-жалобы (например, только плохой сон,
+     или только сухая кожа) — не для сложной многосимптомной картины.
   1. Вызови list_bads_catalog — узнай, какие БАД реально есть в каталоге и от чего они.
   2. Сравни жалобу пользователя ТОЛЬКО с полями goal/notes, которые вернул list_bads_catalog.
      НЕ придумывай дополнительных показаний и механизмов, которых там нет — например,
@@ -381,6 +391,32 @@ async def _run_tool_loop(
             else:
                 parsed["bad_recommendation"] = None
                 bad_key = None
+
+        # A complaint touching 2+ of our products' indication domains at once
+        # (e.g. skin/hair terms AND immunity terms together) is a precise proxy
+        # for "several distinct symptoms across body systems" — the kind of
+        # picture where a single keyword match isn't enough grounds for a
+        # confident BAD recommendation. (Raw word count was tried first and
+        # rejected — it false-positived on long but single-topic complaints,
+        # e.g. a detailed sleep/stress description.) The prompt rule alone
+        # doesn't reliably catch this either (verified live — worked ~1/3 of
+        # the time), so force a second-opinion pass instead of trusting it.
+        from data.bad_safety import count_matched_indication_categories
+        if bad_key and count_matched_indication_categories(complaint_text) >= 2:
+            logging.warning(f"Complex multi-symptom complaint with bad_recommendation={bad_key!r}, double-checking")
+            corrected = await _ask_for_rewrite(
+                "Жалоба выше описывает НЕСКОЛЬКО разных симптомов сразу, а не одну "
+                f"изолированную lifestyle-проблему. Перепроверь: точно ли '{bad_key}' — "
+                "уместная рекомендация для ВСЕЙ этой картины, а не только для одного "
+                "случайно совпавшего слова? Если другие симптомы (например, изменение "
+                "вкуса/запаха, кожные изменения, плохое заживление ран) указывают на что-то, "
+                "требующее очной диагностики, а не самостоятельного подбора БАД — оставь "
+                "bad_recommendation и general_supplement_suggestion null, is_lifestyle=false, "
+                "и направь к врачу. Ответь тем же JSON-форматом, без вызова инструментов."
+            )
+            if corrected is not None:
+                parsed = corrected
+                bad_key = parsed.get("bad_recommendation")
 
     if _contains_stray_english(parsed.get("text", "")):
         logging.warning(f"Stray English in response, asking for a rewrite: {parsed.get('text')!r}")
