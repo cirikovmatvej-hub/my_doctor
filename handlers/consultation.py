@@ -225,7 +225,7 @@ async def handle_symptom(message: Message, state: FSMContext) -> None:
 
     # Summary includes patient profile for the doctor
     summary = f"[{_profile_line(gender, age_range)}] {(ai.get('text') or '')[:480]}"
-    await update_session_summary(session_id, summary)
+    await update_session_summary(session_id, summary, schedule_followup=ai.get("needs_followup", False))
 
     if SHOW_DOCTOR_RECOMMENDATIONS and ai.get("doctor_specialty"):
         owner_id = await get_or_create_user(message.from_user.id, message.from_user.username)

@@ -122,6 +122,13 @@ general_supplement_suggestion — если для lifestyle-проблемы и�
 
 is_lifestyle — true если это проблема образа жизни/самочувствия, false если острая медицинская ситуация
 
+needs_followup — true, только если это РЕАЛЬНАЯ жалоба на самочувствие, за которой имеет
+смысл проверить через несколько дней "как вы сейчас, помогли ли рекомендации". false для
+информационных/бытовых вопросов без жалобы (когда/как принимать БАД, дозировка, натощак
+или нет, длительность курса, общие вопросы про добавки) — там нечему "стать лучше", и
+follow-up-сообщение будет выглядеть нелепо (пример: пользователь спросил "какой магний
+лучше, хелат или цитрат", а через 3 дня бот спрашивает "как самочувствие?" — это неуместно).
+
 ═══════════════════════════════════════
 ЖЁСТКИЕ ПРАВИЛА:
 - НИКОГДА не ставь диагноз (используй формулировки "возможно", "могут указывать")
@@ -147,11 +154,12 @@ is_lifestyle — true если это проблема образа жизни/�
   "doctor_specialty": null | "therapist" | "surgeon" | "cardiologist" | "neurologist" | "gynecologist" | "pediatrician",
   "bad_recommendation": null | "magnesium" | "collagen" | "vitamin_d3",
   "general_supplement_suggestion": null | "название добавки простыми словами",
-  "is_lifestyle": false | true
+  "is_lifestyle": false | true,
+  "needs_followup": false | true
 }}
 
-Для type=question: doctor_specialty=null, bad_recommendation=null, general_supplement_suggestion=null, is_lifestyle=false
-Для type=emergency: doctor_specialty=null, bad_recommendation=null, general_supplement_suggestion=null, is_lifestyle=false"""
+Для type=question: doctor_specialty=null, bad_recommendation=null, general_supplement_suggestion=null, is_lifestyle=false, needs_followup=false
+Для type=emergency: doctor_specialty=null, bad_recommendation=null, general_supplement_suggestion=null, is_lifestyle=false, needs_followup=false"""
 
 
 # ---------------------------------------------------------------------------
@@ -500,6 +508,7 @@ async def analyze_symptoms(
             "bad_recommendation": None,
             "general_supplement_suggestion": None,
             "is_lifestyle": False,
+            "needs_followup": False,
         }
 
 

@@ -442,12 +442,12 @@ async def create_session(user_id: int, complaint: str, family_member_id: int | N
         return row[0]
 
 
-async def update_session_summary(session_id: int, summary: str) -> None:
-    follow_up_at = datetime.now() + timedelta(hours=FOLLOW_UP_HOURS)
+async def update_session_summary(session_id: int, summary: str, schedule_followup: bool = True) -> None:
+    follow_up_at = (datetime.now() + timedelta(hours=FOLLOW_UP_HOURS)).isoformat() if schedule_followup else None
     async with _connect() as db:
         await db.execute(
             "UPDATE sessions SET summary=?, status='completed', follow_up_at=? WHERE id=?",
-            (summary, follow_up_at.isoformat(), session_id),
+            (summary, follow_up_at, session_id),
         )
         await db.commit()
 
