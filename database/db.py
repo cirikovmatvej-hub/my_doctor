@@ -583,6 +583,25 @@ async def get_active_trackings(user_id: int) -> list:
             return await cur.fetchall()
 
 
+async def get_tracking(tracking_id: int) -> dict | None:
+    async with _connect() as db:
+        async with db.execute(
+            "SELECT id, user_id, product_key FROM product_tracking WHERE id=?", (tracking_id,)
+        ) as cur:
+            row = await cur.fetchone()
+    if not row:
+        return None
+    return {"id": row[0], "user_id": row[1], "product_key": row[2]}
+
+
+async def stop_tracking(tracking_id: int) -> None:
+    """Soft-delete: flips status so it drops out of get_active_trackings and
+    the reminder loop, without losing intake_logs history."""
+    async with _connect() as db:
+        await db.execute("UPDATE product_tracking SET status='stopped' WHERE id=?", (tracking_id,))
+        await db.commit()
+
+
 async def get_days_taken(tracking_id: int) -> int:
     async with _connect() as db:
         async with db.execute(

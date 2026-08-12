@@ -29,12 +29,13 @@ from data.resources import BAD_DETAILS, BADS
 from database.db import (
     create_tracking, get_active_trackings, get_days_taken,
     get_due_reminders, get_near_end_courses, get_or_create_user,
-    get_utc_offset, log_intake, mark_end_reminder_sent,
-    mark_reminder_sent, set_utc_offset,
+    get_tracking, get_utc_offset, log_intake, mark_end_reminder_sent,
+    mark_reminder_sent, set_utc_offset, stop_tracking,
 )
 from keyboards.keyboards import (
     bail_if_menu_button, daily_doses_keyboard, intake_keyboard, main_menu,
-    time_keyboard, timezone_keyboard, tracker_menu_keyboard,
+    time_keyboard, timezone_keyboard, tracker_delete_confirm_keyboard,
+    tracker_menu_keyboard, tracker_stop_list_keyboard,
 )
 
 router = Router()
@@ -75,6 +76,7 @@ async def cmd_tracker(message: Message, state: FSMContext) -> None:
         return
 
     lines = ["📊 <b>Ваши активные курсы:</b>\n"]
+    stop_options = []
     for tracking_id, product_key, start_date, course_days, rt1, rt2 in trackings:
         d = BAD_DETAILS.get(product_key, {})
         name = d.get("full_name", product_key)
@@ -88,9 +90,14 @@ async def cmd_tracker(message: Message, state: FSMContext) -> None:
             f"   ⏳ Осталось: {days_left} дней\n"
             f"   🔔 Напоминания: {remind}\n"
         )
+        stop_options.append((tracking_id, name))
 
     lines.append("Для нового курса — «💊 Подбор БАД» или добавьте свой БАД 👇")
     await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=tracker_menu_keyboard())
+    await message.answer(
+        "Чтобы остановить курс, нажмите на него 👇",
+        reply_markup=tracker_stop_list_keyboard(stop_options),
+    )
     await message.answer("Выберите действие 👇", reply_markup=main_menu())
 
 
@@ -351,6 +358,56 @@ async def _create_and_confirm(message: Message, state: FSMContext, time_2: str |
         parse_mode="HTML",
     )
     await message.answer("Выберите действие 👇", reply_markup=main_menu())
+
+
+# ── Stop/delete tracking ────────────────────────────────────────────────────
+
+async def _owned_tracking_or_none(call: CallbackQuery, tracking_id: int) -> dict | None:
+    tracking = await get_tracking(tracking_id)
+    if not tracking:
+        await call.answer("Курс не найден", show_alert=True)
+        return None
+    user_id = await get_or_create_user(call.from_user.id, call.from_user.username)
+    if tracking["user_id"] != user_id:
+        await call.answer("Это не ваш курс", show_alert=True)
+        return None
+    return tracking
+
+
+@router.callback_query(F.data.startswith("track:delete:"))
+async def cb_track_delete(call: CallbackQuery) -> None:
+    tracking_id = int(call.data.split(":")[2])
+    tracking = await _owned_tracking_or_none(call, tracking_id)
+    if not tracking:
+        return
+
+    d = BAD_DETAILS.get(tracking["product_key"], {})
+    name = d.get("full_name", tracking["product_key"])
+    await call.message.edit_text(
+        f"Остановить курс «{name}»? Напоминания перестанут приходить.",
+        reply_markup=tracker_delete_confirm_keyboard(tracking_id),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("track:delete_confirm:"))
+async def cb_track_delete_confirm(call: CallbackQuery) -> None:
+    tracking_id = int(call.data.split(":")[2])
+    tracking = await _owned_tracking_or_none(call, tracking_id)
+    if not tracking:
+        return
+
+    d = BAD_DETAILS.get(tracking["product_key"], {})
+    name = d.get("full_name", tracking["product_key"])
+    await stop_tracking(tracking_id)
+    await call.message.edit_text(f"🛑 Курс «{name}» остановлен.", reply_markup=None)
+    await call.answer()
+
+
+@router.callback_query(F.data == "track:delete_cancel")
+async def cb_track_delete_cancel(call: CallbackQuery) -> None:
+    await call.message.edit_text("Хорошо, курс не тронут.", reply_markup=None)
+    await call.answer()
 
 
 # ── Intake callbacks ───────────────────────────────────────────────────────

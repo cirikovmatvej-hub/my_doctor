@@ -219,6 +219,23 @@ def tracker_menu_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def tracker_stop_list_keyboard(trackings: list[tuple[int, str]]) -> InlineKeyboardMarkup:
+    """trackings: list of (tracking_id, display_name) — one row per active course."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"🗑 {name}", callback_data=f"track:delete:{tracking_id}")]
+            for tracking_id, name in trackings
+        ]
+    )
+
+
+def tracker_delete_confirm_keyboard(tracking_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Да, остановить", callback_data=f"track:delete_confirm:{tracking_id}"),
+        InlineKeyboardButton(text="❌ Отмена",         callback_data="track:delete_cancel"),
+    ]])
+
+
 def daily_doses_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[[
