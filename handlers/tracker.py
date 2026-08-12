@@ -33,8 +33,8 @@ from database.db import (
     mark_reminder_sent, set_utc_offset,
 )
 from keyboards.keyboards import (
-    daily_doses_keyboard, intake_keyboard, main_menu, time_keyboard,
-    timezone_keyboard, tracker_menu_keyboard,
+    bail_if_menu_button, daily_doses_keyboard, intake_keyboard, main_menu,
+    time_keyboard, timezone_keyboard, tracker_menu_keyboard,
 )
 
 router = Router()
@@ -137,6 +137,8 @@ async def cb_track_custom(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(TrackerState.entering_custom_name)
 async def msg_custom_name(message: Message, state: FSMContext) -> None:
+    if await bail_if_menu_button(message, state):
+        return
     name = (message.text or "").strip()
     if not (1 <= len(name) <= 100):
         await message.answer("Название должно быть от 1 до 100 символов.")
@@ -168,6 +170,8 @@ async def cb_track_custom_start(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(TrackerState.entering_custom_course_days)
 async def msg_custom_course_days(message: Message, state: FSMContext) -> None:
+    if await bail_if_menu_button(message, state):
+        return
     text = (message.text or "").strip()
     if not text.isdigit() or not (1 <= int(text) <= 365):
         await message.answer("⚠️ Введите число дней от 1 до 365, например <code>30</code>.", parse_mode="HTML")
@@ -255,6 +259,8 @@ async def cb_time_1(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(TrackerState.entering_custom_time_1)
 async def msg_custom_time_1(message: Message, state: FSMContext) -> None:
+    if await bail_if_menu_button(message, state):
+        return
     t = _parse_time(message.text)
     if not t:
         await message.answer("⚠️ Формат не распознан. Введите время как <b>ЧЧ:ММ</b>, например <code>09:00</code>", parse_mode="HTML")
@@ -303,6 +309,8 @@ async def cb_time_2(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(TrackerState.entering_custom_time_2)
 async def msg_custom_time_2(message: Message, state: FSMContext) -> None:
+    if await bail_if_menu_button(message, state):
+        return
     t = _parse_time(message.text)
     if not t:
         await message.answer("⚠️ Формат не распознан. Введите время как <b>ЧЧ:ММ</b>, например <code>21:00</code>", parse_mode="HTML")

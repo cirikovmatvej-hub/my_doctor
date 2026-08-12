@@ -1,13 +1,29 @@
+from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     ReplyKeyboardMarkup,
     KeyboardButton,
     ReplyKeyboardRemove,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    Message,
 )
 
 
 # ── Main menu (5 buttons) ─────────────────────────────────────────────────
+
+# Single source of truth for main-menu button texts — reused wherever a
+# free-text FSM input needs to reject an accidental menu-button press instead
+# of swallowing it as data (e.g. tracker.py's "enter a custom BAD name" step).
+MAIN_MENU_LABELS: frozenset[str] = frozenset({
+    "🩺 Анализ симптомов",
+    "💊 Подбор БАД",
+    "📊 Мой трекер",
+    "📔 Дневник",
+    "📋 История",
+    "👨‍👩‍👧 Семья",
+    "⚙️ Мой профиль",
+})
+
 
 def main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
@@ -23,6 +39,23 @@ def main_menu() -> ReplyKeyboardMarkup:
 
 def remove_keyboard() -> ReplyKeyboardRemove:
     return ReplyKeyboardRemove()
+
+
+async def bail_if_menu_button(message: Message, state: FSMContext) -> bool:
+    """If the user pressed a main-menu button while stuck in an unrelated
+    free-text FSM step, exit that flow instead of swallowing the button label
+    as data (e.g. a "supplement" or family member literally named
+    "🩺 Анализ симптомов"). Call at the top of any free-text state handler;
+    if this returns True, the caller should return immediately."""
+    if message.text in MAIN_MENU_LABELS:
+        await state.clear()
+        await message.answer(
+            "Похоже, вы хотели перейти в другой раздел — вышел из текущего шага. "
+            "Нажмите на кнопку ещё раз 👇",
+            reply_markup=main_menu(),
+        )
+        return True
+    return False
 
 
 # ── Profile ───────────────────────────────────────────────────────────────

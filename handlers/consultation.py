@@ -30,8 +30,8 @@ from database.db import (
 )
 from handlers.appointment import schedule_appointment_followup
 from keyboards.keyboards import (
-    consult_for_keyboard, general_supplement_keyboard, main_menu,
-    remove_keyboard, track_start_keyboard,
+    MAIN_MENU_LABELS, consult_for_keyboard, general_supplement_keyboard,
+    main_menu, remove_keyboard, track_start_keyboard,
 )
 
 router = Router()
@@ -394,21 +394,10 @@ async def handle_pdf_direct(message: Message, state: FSMContext) -> None:
 
 # ── Auto-start: пользователь пишет симптомы без нажатия кнопки ────────────
 
-# Тексты кнопок и команд, которые НЕ должны запускать консультацию
-_RESERVED = {
-    "🩺 Анализ симптомов",
-    "💊 Подбор БАД",
-    "📊 Мой трекер",
-    "📔 Дневник",
-    "📋 История",
-    "👨‍👩‍👧 Семья",
-    "⚙️ Мой профиль",
-}
-
 @router.message(
     StateFilter(None),        # пользователь не в каком-либо состоянии
     F.text,
-    ~F.text.in_(_RESERVED),   # не нажал кнопку меню
+    ~F.text.in_(MAIN_MENU_LABELS),   # не нажал кнопку меню
 )
 async def auto_start(message: Message, state: FSMContext) -> None:
     """Если пользователь пишет сразу — автоматически начинаем консультацию."""

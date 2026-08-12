@@ -18,7 +18,7 @@ from database.db import (
 )
 from keyboards.keyboards import (
     appointment_booked_keyboard, appointment_reason_keyboard,
-    appointment_remind_keyboard, main_menu,
+    appointment_remind_keyboard, bail_if_menu_button, main_menu,
 )
 
 router = Router()
@@ -178,6 +178,8 @@ def _parse_custom_date(text: str) -> datetime | None:
 
 @router.message(AppointmentState.entering_custom_date)
 async def msg_custom_date(message: Message, state: FSMContext) -> None:
+    if await bail_if_menu_button(message, state):
+        return
     dt = _parse_custom_date(message.text)
     if not dt:
         await message.answer(

@@ -9,7 +9,7 @@ from database.db import (
     get_family_members, get_or_create_user, set_family_member_field,
 )
 from keyboards.keyboards import (
-    activity_keyboard, age_keyboard, alcohol_keyboard,
+    activity_keyboard, age_keyboard, alcohol_keyboard, bail_if_menu_button,
     family_delete_keyboard, family_list_keyboard, family_member_keyboard,
     gender_keyboard, main_menu, pregnancy_keyboard, relation_keyboard,
     skip_keyboard, smoking_keyboard,
@@ -176,6 +176,8 @@ async def cb_family_add(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(FamilyState.entering_name)
 async def msg_family_name(message: Message, state: FSMContext) -> None:
+    if await bail_if_menu_button(message, state):
+        return
     name = message.text.strip()
     if not (1 <= len(name) <= 50):
         await message.answer("Имя должно быть от 1 до 50 символов.")
@@ -265,6 +267,8 @@ async def fam_age(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(FamilyState.waiting_chronic)
 async def fam_chronic_text(message: Message, state: FSMContext) -> None:
+    if await bail_if_menu_button(message, state):
+        return
     data = await state.get_data()
     await set_family_member_field(data["member_id"], "chronic_diseases", message.text.strip())
     await _ask_allergies(message, state)
@@ -290,6 +294,8 @@ async def _ask_allergies(msg: Message, state: FSMContext) -> None:
 
 @router.message(FamilyState.waiting_allergies)
 async def fam_allergies_text(message: Message, state: FSMContext) -> None:
+    if await bail_if_menu_button(message, state):
+        return
     data = await state.get_data()
     await set_family_member_field(data["member_id"], "allergies", message.text.strip())
     await _ask_medications(message, state)
@@ -315,6 +321,8 @@ async def _ask_medications(msg: Message, state: FSMContext) -> None:
 
 @router.message(FamilyState.waiting_medications)
 async def fam_medications_text(message: Message, state: FSMContext) -> None:
+    if await bail_if_menu_button(message, state):
+        return
     data = await state.get_data()
     await set_family_member_field(data["member_id"], "medications", message.text.strip())
     await _after_medications(message, state)
@@ -358,6 +366,8 @@ async def _ask_surgeries(msg: Message, state: FSMContext) -> None:
 
 @router.message(FamilyState.waiting_surgeries)
 async def fam_surgeries_text(message: Message, state: FSMContext) -> None:
+    if await bail_if_menu_button(message, state):
+        return
     data = await state.get_data()
     await set_family_member_field(data["member_id"], "past_surgeries", message.text.strip())
     await _ask_hereditary(message, state)
@@ -384,6 +394,8 @@ async def _ask_hereditary(msg: Message, state: FSMContext) -> None:
 
 @router.message(FamilyState.waiting_hereditary)
 async def fam_hereditary_text(message: Message, state: FSMContext) -> None:
+    if await bail_if_menu_button(message, state):
+        return
     data = await state.get_data()
     await set_family_member_field(data["member_id"], "hereditary_diseases", message.text.strip())
     await _ask_smoking(message, state)
@@ -439,6 +451,8 @@ async def fam_activity(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(FamilyState.waiting_height)
 async def fam_height_text(message: Message, state: FSMContext) -> None:
+    if await bail_if_menu_button(message, state):
+        return
     data = await state.get_data()
     await set_family_member_field(data["member_id"], "height_weight", message.text.strip())
     await _finish_member(message, state)

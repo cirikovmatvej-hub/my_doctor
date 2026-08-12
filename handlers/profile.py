@@ -20,7 +20,7 @@ from database.db import (
 # ── Inline labels (for profile summary display) ────────────────────────────
 from ai.assistant import SMOKING_RU, ALCOHOL_RU, ACTIVITY_RU, PREGNANCY_RU
 from keyboards.keyboards import (
-    activity_keyboard, age_keyboard, alcohol_keyboard,
+    activity_keyboard, age_keyboard, alcohol_keyboard, bail_if_menu_button,
     gender_keyboard, main_menu, pregnancy_keyboard,
     skip_keyboard, smoking_keyboard, update_profile_keyboard,
 )
@@ -149,6 +149,8 @@ async def cb_age(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(ProfileStates.waiting_chronic)
 async def msg_chronic(message: Message, state: FSMContext) -> None:
+    if await bail_if_menu_button(message, state):
+        return
     await set_health_field(message.from_user.id, "chronic_diseases", message.text.strip())
     await _ask_allergies(message, state)
 
@@ -177,6 +179,8 @@ async def _ask_allergies(message: Message, state: FSMContext) -> None:
 
 @router.message(ProfileStates.waiting_allergies)
 async def msg_allergies(message: Message, state: FSMContext) -> None:
+    if await bail_if_menu_button(message, state):
+        return
     await set_health_field(message.from_user.id, "allergies", message.text.strip())
     await _ask_medications(message, state)
 
@@ -205,6 +209,8 @@ async def _ask_medications(message: Message, state: FSMContext) -> None:
 
 @router.message(ProfileStates.waiting_medications)
 async def msg_medications(message: Message, state: FSMContext) -> None:
+    if await bail_if_menu_button(message, state):
+        return
     await set_health_field(message.from_user.id, "medications", message.text.strip())
     data = await state.get_data()
     if data.get("gender") == "male":
@@ -259,6 +265,8 @@ async def _ask_surgeries(message: Message, state: FSMContext) -> None:
 
 @router.message(ProfileStates.waiting_surgeries)
 async def msg_surgeries(message: Message, state: FSMContext) -> None:
+    if await bail_if_menu_button(message, state):
+        return
     await set_health_field(message.from_user.id, "past_surgeries", message.text.strip())
     await _ask_hereditary(message, state)
 
@@ -286,6 +294,8 @@ async def _ask_hereditary(message: Message, state: FSMContext) -> None:
 
 @router.message(ProfileStates.waiting_hereditary)
 async def msg_hereditary(message: Message, state: FSMContext) -> None:
+    if await bail_if_menu_button(message, state):
+        return
     await set_health_field(message.from_user.id, "hereditary_diseases", message.text.strip())
     await _ask_smoking(message, state)
 
@@ -376,6 +386,8 @@ async def _ask_height_weight(message: Message, state: FSMContext) -> None:
 
 @router.message(ProfileStates.waiting_height)
 async def msg_height(message: Message, state: FSMContext) -> None:
+    if await bail_if_menu_button(message, state):
+        return
     await set_health_field(message.from_user.id, "height_weight", message.text.strip())
     await _finish(message, state)
 
