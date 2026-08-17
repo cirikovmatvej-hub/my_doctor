@@ -213,9 +213,10 @@ def general_supplement_keyboard(name: str) -> InlineKeyboardMarkup:
 
 def tracker_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[[
-            InlineKeyboardButton(text="➕ Другой БАД", callback_data="track:custom"),
-        ]]
+        inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Другой БАД", callback_data="track:custom")],
+            [InlineKeyboardButton(text="📜 История курсов", callback_data="track:history")],
+        ]
     )
 
 

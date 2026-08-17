@@ -27,10 +27,10 @@ from aiogram.types import CallbackQuery, Message
 
 from data.resources import BAD_DETAILS, BADS
 from database.db import (
-    create_tracking, get_active_trackings, get_days_taken,
-    get_due_reminders, get_near_end_courses, get_or_create_user,
-    get_tracking, get_utc_offset, log_intake, mark_end_reminder_sent,
-    mark_reminder_sent, set_utc_offset, stop_tracking,
+    complete_finished_trackings, create_tracking, get_active_trackings,
+    get_days_taken, get_due_reminders, get_near_end_courses, get_or_create_user,
+    get_tracking, get_tracking_history, get_utc_offset, log_intake,
+    mark_end_reminder_sent, mark_reminder_sent, set_utc_offset, stop_tracking,
 )
 from keyboards.keyboards import (
     bail_if_menu_button, daily_doses_keyboard, intake_keyboard, main_menu,
@@ -104,6 +104,34 @@ async def cmd_tracker(message: Message, state: FSMContext) -> None:
 def _reminder_label(rt1: str | None, rt2: str | None) -> str:
     times = [t for t in (rt1, rt2) if t]
     return " и ".join(times) if times else "отключены"
+
+
+_STATUS_LABEL = {"completed": "✅ завершён", "stopped": "🛑 остановлен вручную"}
+
+
+@router.callback_query(F.data == "track:history")
+async def cb_track_history(call: CallbackQuery) -> None:
+    user_id = await get_or_create_user(call.from_user.id, call.from_user.username)
+    history = await get_tracking_history(user_id)
+
+    if not history:
+        await call.message.answer("📜 <b>История курсов</b>\n\nПока пусто — здесь появятся завершённые и остановленные курсы.", parse_mode="HTML")
+        await call.answer()
+        return
+
+    lines = ["📜 <b>История курсов:</b>\n"]
+    for tracking_id, product_key, start_date, course_days, status in history:
+        d = BAD_DETAILS.get(product_key, {})
+        name = d.get("full_name", product_key)
+        emoji = d.get("emoji", "💊")
+        days_taken = await get_days_taken(tracking_id)
+        lines.append(
+            f"{emoji} <b>{name}</b> — {_STATUS_LABEL.get(status, status)}\n"
+            f"   ✅ Принято: {days_taken} / {course_days} дней\n"
+        )
+
+    await call.message.answer("\n".join(lines), parse_mode="HTML")
+    await call.answer()
 
 
 # ── Start tracking (from bad_advisor card) ─────────────────────────────────
@@ -488,12 +516,39 @@ async def _send_end_reminder(bot: Bot, tracking_id: int, telegram_id: int,
         logging.warning(f"Cannot send end-reminder to {telegram_id}: {e}")
 
 
+async def _send_course_completed(bot: Bot, telegram_id: int, product_key: str, course_days: int) -> None:
+    d = BAD_DETAILS.get(product_key, {})
+    name = d.get("full_name", product_key)
+    emoji = d.get("emoji", "💊")
+    text = (
+        f"🎉 <b>Курс завершён!</b>\n\n"
+        f"{emoji} <b>{name}</b>\n"
+        f"✅ Пройдено {course_days} из {course_days} дней — поздравляю!\n\n"
+        "Напоминания по этому курсу больше не будут приходить. "
+        "Посмотреть его можно в истории курсов («📊 Мой трекер»)."
+    )
+    try:
+        await bot.send_message(telegram_id, text, parse_mode="HTML")
+    except Exception as e:
+        logging.warning(f"Cannot send completion message to {telegram_id}: {e}")
+
+
 async def reminder_loop(bot: Bot) -> None:
     logging.info("Tracker reminder loop started")
     while True:
         await asyncio.sleep(REMINDER_CHECK_INTERVAL)
         try:
             now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+
+            # Stop nagging once a course is actually done — get_due_reminders
+            # only filters by status='active', it never checked days_taken vs
+            # course_days on its own, so a finished course kept getting
+            # reminders forever until this runs first each iteration.
+            finished = await complete_finished_trackings()
+            for tracking_id, telegram_id, product_key, course_days in finished:
+                await _send_course_completed(bot, telegram_id, product_key, course_days)
+            if finished:
+                logging.info(f"Completed {len(finished)} finished courses")
 
             due = await get_due_reminders(now_utc)
             for tracking_id, telegram_id, product_key, _, slot, user_date in due:

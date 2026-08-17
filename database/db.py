@@ -612,6 +612,40 @@ async def get_days_taken(tracking_id: int) -> int:
         return row[0] if row else 0
 
 
+async def complete_finished_trackings() -> list[tuple[int, int, str, int]]:
+    """Flip status to 'completed' for every active tracking whose days-taken
+    has reached course_days, so the reminder loop stops nagging once a course
+    is actually done. Returns (tracking_id, telegram_id, product_key,
+    course_days) for each newly-completed one, for a "course finished!" ping."""
+    async with _connect() as db:
+        async with db.execute(
+            "SELECT pt.id, u.telegram_id, pt.product_key, pt.course_days, "
+            "(SELECT COUNT(DISTINCT log_date) FROM intake_logs "
+            " WHERE tracking_id=pt.id AND status='taken') AS days_taken "
+            "FROM product_tracking pt JOIN users u ON u.id=pt.user_id "
+            "WHERE pt.status='active'"
+        ) as cur:
+            rows = await cur.fetchall()
+
+        finished = [row for row in rows if row[4] >= row[3]]
+        for tracking_id, *_ in finished:
+            await db.execute("UPDATE product_tracking SET status='completed' WHERE id=?", (tracking_id,))
+        await db.commit()
+
+    return [(tid, tg_id, key, days) for tid, tg_id, key, days, _ in finished]
+
+
+async def get_tracking_history(user_id: int, limit: int = 15) -> list:
+    async with _connect() as db:
+        async with db.execute(
+            "SELECT id, product_key, start_date, course_days, status "
+            "FROM product_tracking WHERE user_id=? AND status IN ('completed', 'stopped') "
+            "ORDER BY created_at DESC LIMIT ?",
+            (user_id, limit),
+        ) as cur:
+            return await cur.fetchall()
+
+
 async def log_intake(tracking_id: int, log_date: str, time_of_day: str, status: str) -> None:
     async with _connect() as db:
         await db.execute(
