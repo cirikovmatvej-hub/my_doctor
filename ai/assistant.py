@@ -13,6 +13,16 @@ client = AsyncOpenAI(
     base_url="https://api.groq.com/openai/v1",
 )
 
+# Groq has retired every plain (non-reasoning) Llama model we tried — llama-4-scout
+# (vision) first, then llama-3.3-70b-versatile (text, retired 2026-08-16) — so both
+# paths now run on the same reasoning-capable model. It's a "thinking" model:
+# reasoning_format="parsed" keeps <think> reasoning out of the JSON content
+# (verified: "hidden" breaks JSON mode entirely on this model, "parsed" works with
+# both JSON mode and tool-calling), and reasoning tokens still count against
+# max_tokens even when hidden from `content`, so budgets need headroom.
+_MODEL = "qwen/qwen3.6-27b"
+_REASONING_FORMAT = "parsed"
+
 # ---------------------------------------------------------------------------
 # System prompt
 # ---------------------------------------------------------------------------
@@ -498,7 +508,10 @@ async def analyze_symptoms(
     ] + list(messages)
 
     try:
-        return await _run_tool_loop(chat_messages, "llama-3.3-70b-versatile", profile)
+        return await _run_tool_loop(
+            chat_messages, _MODEL, profile,
+            reasoning_format=_REASONING_FORMAT, max_tokens=1500,
+        )
     except Exception as e:
         logging.error(f"OpenAI error: {e}")
         return {
@@ -584,15 +597,6 @@ def _extract_json(text: str) -> dict | None:
     return None
 
 
-# Groq deprecated the old llama-4-scout vision model; qwen/qwen3.6-27b is the
-# current vision-capable model and (unlike the old one) supports tool-calling
-# and JSON mode. It's a "thinking" model — reasoning_format="parsed" keeps
-# <think> reasoning out of the JSON content (verified: "hidden" breaks JSON
-# mode entirely on this model, "parsed" works with both JSON mode and tools).
-_VISION_MODEL = "qwen/qwen3.6-27b"
-_VISION_REASONING_FORMAT = "parsed"
-
-
 def _profile_note(gender: str | None, age_range: str | None) -> str:
     if not (gender or age_range):
         return ""
@@ -633,10 +637,10 @@ async def analyze_photo(
         # back truncated/empty before giving up.
         for attempt_max_tokens in (max_tokens, min(max_tokens * 2, 5000)):
             response = await client.chat.completions.create(
-                model=_VISION_MODEL,
+                model=_MODEL,
                 messages=messages,
                 response_format={"type": "json_object"},
-                extra_body={"reasoning_format": _VISION_REASONING_FORMAT},
+                extra_body={"reasoning_format": _REASONING_FORMAT},
                 temperature=0.3,
                 max_tokens=attempt_max_tokens,
             )
@@ -674,19 +678,27 @@ async def analyze_lab_text(
     )
 
     try:
-        response = await client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
-            temperature=0.3,
-            max_tokens=900,
-        )
-        raw = response.choices[0].message.content
-        result = _extract_json(raw)
-        if result and "text" in result:
-            return result
+        # Same retry-on-truncated-JSON pattern as analyze_photo — reasoning
+        # tokens count against max_tokens even though reasoning_format="parsed"
+        # hides them from `content`, and reasoning length varies run to run.
+        max_tokens = 900
+        for attempt_max_tokens in (max_tokens, min(max_tokens * 2, 3000)):
+            response = await client.chat.completions.create(
+                model=_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+                extra_body={"reasoning_format": _REASONING_FORMAT},
+                temperature=0.3,
+                max_tokens=attempt_max_tokens,
+            )
+            raw = response.choices[0].message.content
+            result = _extract_json(raw or "")
+            if result and "text" in result:
+                return result
+            logging.warning(f"Lab text response not valid JSON (max_tokens={attempt_max_tokens}): {raw!r}")
+
         return {
-            "text": raw.strip(),
+            "text": (raw or "").strip() or "Не удалось разобрать ответ модели.",
             "doctor_specialty": "therapist",
             "bad_recommendation": None,
             "general_supplement_suggestion": None,
