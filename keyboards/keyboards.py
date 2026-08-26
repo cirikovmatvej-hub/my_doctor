@@ -321,9 +321,16 @@ def intake_keyboard(tracking_id: int, time_of_day: str) -> InlineKeyboardMarkup:
 # Word only, no emoji — the plain label diary.py's confirmation lines reuse
 # after each tap (e.g. "😴 Сон: Хорошо"), so there's one source of truth
 # instead of the keyboard and the confirmation text drifting apart.
+#
+# False (sleep/energy) uses evaluative interjections ("как сон? — Хорошо") —
+# unambiguous standalone. True (stress) can't use the same style: adverbs of
+# degree like "Заметно"/"Сильно" only make sense modifying an implicit verb
+# ("стресс заметно повышен"), not standing alone after "Стресс: " (reported
+# live — read as meaningless on its own). Adjectives agreeing with "стресс"
+# ("Стресс: высокий") read correctly both as a button answer and standalone.
 RATING_WORDS: dict[bool, dict[int, str]] = {
     False: {1: "Плохо", 2: "Так себе", 3: "Средне", 4: "Хорошо", 5: "Отлично"},
-    True:  {1: "Спокойно", 2: "Слегка", 3: "Средне", 4: "Заметно", 5: "Сильно"},
+    True:  {1: "Низкий", 2: "Небольшой", 3: "Средний", 4: "Повышенный", 5: "Высокий"},
 }
 _RATING_EMOJI: dict[bool, dict[int, str]] = {
     False: {1: "😞", 2: "😕", 3: "😐", 4: "🙂", 5: "😄"},
