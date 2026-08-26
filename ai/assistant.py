@@ -413,13 +413,37 @@ async def _run_tool_loop(
     if parsed is None:
         # Thinking-model reasoning length varies run to run and can occasionally
         # burn through the whole budget before the final JSON is written out —
-        # retry the same call once with double the budget before giving up.
+        # retry with progressively bigger budgets before giving up. Build a
+        # clean request rather than reusing `kwargs`: that dict still carries
+        # tools/tool_choice="auto" from whichever round set it last, so a
+        # naive retry could have the model make yet another tool call instead
+        # of answering — content stays None and _extract_json can't recover
+        # (verified live: this is exactly how a single-shot "retry" still
+        # crashed). Groq's own JSON-mode validation can also 400 on a
+        # generation that came back empty (verified live) — catch that per
+        # attempt instead of letting it abort the whole retry sequence.
         logging.warning("Empty/invalid JSON response, retrying with larger max_tokens")
-        retry_kwargs = dict(kwargs)
-        retry_kwargs["max_tokens"] = min(max_tokens * 2, 6000)
-        response = await client.chat.completions.create(**retry_kwargs)
-        msg = response.choices[0].message
-        parsed = _extract_json(msg.content or "")
+        chat_messages.append({
+            "role": "user",
+            "content": "Дай финальный ответ строго в формате JSON, как указано в инструкциях, без новых вызовов инструментов.",
+        })
+        for attempt_max_tokens in (min(max_tokens * 2, 6000), min(max_tokens * 3, 8000)):
+            retry_kwargs = dict(
+                model=model, messages=chat_messages,
+                response_format={"type": "json_object"},
+                temperature=0.3, max_tokens=attempt_max_tokens,
+            )
+            if extra_body:
+                retry_kwargs["extra_body"] = extra_body
+            try:
+                response = await client.chat.completions.create(**retry_kwargs)
+            except Exception as e:
+                logging.warning(f"Retry request failed (max_tokens={attempt_max_tokens}): {e}")
+                continue
+            msg = response.choices[0].message
+            parsed = _extract_json(msg.content or "")
+            if parsed is not None:
+                break
 
     if parsed is None:
         raise ValueError(f"Model response was not valid JSON: {msg.content!r}")
@@ -589,9 +613,15 @@ async def analyze_symptoms(
     ] + list(messages)
 
     try:
+        # 2500, not 1500: live testing showed this model's own <think>
+        # reasoning alone can hit ~1500 tokens on a normal conversation with
+        # the current (longer, tool-heavy) system prompt, leaving nothing for
+        # the actual JSON — reasoning_tokens capped out at exactly the budget
+        # in ~40% of runs. 2500 mirrors the vision path's budget for the same
+        # model; the retry-with-doubled-budget path still exists as backstop.
         return await _run_tool_loop(
             chat_messages, _MODEL, profile,
-            reasoning_format=_REASONING_FORMAT, max_tokens=1500,
+            reasoning_format=_REASONING_FORMAT, max_tokens=2500,
         )
     except Exception as e:
         logging.error(f"OpenAI error: {e}")
