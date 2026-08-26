@@ -6,16 +6,15 @@ Flow:
     → already filled: show today's summary + trend chart
     → not filled: sleep rating → energy rating → stress rating → BADs taken → save
   Either path sends a chart (matplotlib, rendered off the event loop via
-  asyncio.to_thread) plotting sleep/energy/stress over the last 30 days, with
-  a vertical marker at each tracked course's start date — plus a short
-  before/after text summary per course that has enough diary data on both
-  sides of that date. This is the whole point of pairing the diary with the
-  tracker: without it, nothing ever showed whether a course actually
-  coincided with feeling better.
+  asyncio.to_thread) plotting sleep/energy/stress over the last 30 days,
+  plus — as the photo's caption text, not drawn on the chart itself — a
+  short before/after summary per tracked course that has enough diary data
+  on both sides of its start date. This pairing is the point of tying the
+  diary to the tracker: without it, nothing ever showed whether a course
+  actually coincided with feeling better.
 """
 import asyncio
 import io
-import re
 from datetime import datetime
 
 import matplotlib
@@ -65,35 +64,20 @@ _METRIC_COLORS = {"sleep": "#4C72B0", "energy": "#DD8452", "stress": "#C44E52"}
 _METRIC_LABELS = {"sleep": "Сон", "energy": "Энергия", "stress": "Стресс"}
 
 
-_CHART_LABEL_MAX_LEN = 22
-# Matplotlib's font (DejaVu Sans) can't render emoji — a custom (non-catalog)
-# tracking name that happens to contain one would show as a missing-glyph
-# box on the chart. Catalog/general-supplement names are our own curated
-# text and never contain emoji, but a custom name is arbitrary user input.
-_EMOJI_RE = re.compile(
-    "[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF\U00002B00-\U00002BFF]+"
-)
-
-
 def _tracking_display_name(product_key: str) -> str:
     return BAD_DETAILS.get(product_key, {}).get("full_name", product_key)
 
 
-def _chart_label(name: str) -> str:
-    """Shorten a tracking name for the chart's rotated course-start label —
-    the full catalog name ("Коллаген комплекс + вит. С, 120 капсул") is too
-    long to read rotated 90° next to a thin dashed line."""
-    name = _EMOJI_RE.sub("", name).strip()
-    if len(name) > _CHART_LABEL_MAX_LEN:
-        name = name[:_CHART_LABEL_MAX_LEN - 1].rstrip() + "…"
-    return name
+def _build_diary_chart(entries: list) -> bytes:
+    """Sleep/energy/stress over time. Runs in a worker thread
+    (asyncio.to_thread) — this is synchronous CPU work and would otherwise
+    stall the whole bot's event loop for every user while it renders.
 
-
-def _build_diary_chart(entries: list, trackings: list) -> bytes:
-    """Sleep/energy/stress over time, with a vertical marker at each tracked
-    course's start date. Runs in a worker thread (asyncio.to_thread) — this
-    is synchronous CPU work and would otherwise stall the whole bot's event
-    loop for every user while it renders."""
+    No course-start markers on the chart itself (dropped per user feedback —
+    they cluttered the image and a garbled tracking name once ended up
+    illegible rotated 90°). The before/after correlation still runs and
+    ships as the photo's caption text instead — that's plain text, not
+    matplotlib, so a long or malformed name there just wraps normally."""
     dates = [datetime.strptime(e[0], "%Y-%m-%d") for e in entries]
     series = {"sleep": [e[1] for e in entries], "energy": [e[2] for e in entries], "stress": [e[3] for e in entries]}
 
@@ -104,32 +88,13 @@ def _build_diary_chart(entries: list, trackings: list) -> bytes:
             label=_METRIC_LABELS[metric], color=_METRIC_COLORS[metric],
         )
 
-    ax.set_ylim(0.5, 6.3)  # headroom above 5 for course-start labels, kept off the data itself
+    ax.set_ylim(0.5, 5.5)
     ax.set_yticks([1, 2, 3, 4, 5])
     ax.set_ylabel("Оценка (1–5)")
     ax.set_title("Дневник самочувствия", fontsize=12, loc="left", pad=12)
     ax.grid(True, alpha=0.3)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
-
-    date_min, date_max = min(dates), max(dates)
-    seen_labels = set()  # de-dupe if two courses started the same day
-    for _tid, product_key, start_date_str, _status in trackings:
-        try:
-            start_date = datetime.strptime(start_date_str[:10], "%Y-%m-%d")
-        except ValueError:
-            continue
-        if not (date_min <= start_date <= date_max):
-            continue
-        name = _chart_label(_tracking_display_name(product_key))
-        ax.axvline(start_date, ymax=0.83, color="#55A868", linestyle="--", alpha=0.6, linewidth=1.5)
-        label_key = start_date_str[:10]
-        if label_key not in seen_labels:
-            ax.annotate(
-                name, xy=(start_date, 5.6), rotation=90,
-                fontsize=8, va="bottom", ha="center", color="#55A868",
-            )
-            seen_labels.add(label_key)
 
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m"))
     fig.autofmt_xdate(rotation=30)
@@ -188,7 +153,7 @@ async def _send_trend_chart(message: Message, user_id: int) -> None:
     entries = list(reversed(entries))  # chronological order for plotting
     trackings = await get_all_trackings(user_id)
 
-    chart_bytes = await asyncio.to_thread(_build_diary_chart, entries, trackings)
+    chart_bytes = await asyncio.to_thread(_build_diary_chart, entries)
     caption = _course_correlation_text(entries, trackings) or "📈 Динамика за последние дни"
     await message.answer_photo(
         BufferedInputFile(chart_bytes, filename="diary_chart.png"),
