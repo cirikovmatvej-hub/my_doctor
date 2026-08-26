@@ -329,8 +329,8 @@ def intake_keyboard(tracking_id: int, time_of_day: str) -> InlineKeyboardMarkup:
 # live — read as meaningless on its own). Adjectives agreeing with "стресс"
 # ("Стресс: высокий") read correctly both as a button answer and standalone.
 RATING_WORDS: dict[bool, dict[int, str]] = {
-    False: {1: "Плохо", 2: "Так себе", 3: "Средне", 4: "Хорошо", 5: "Отлично"},
-    True:  {1: "Низкий", 2: "Небольшой", 3: "Средний", 4: "Повышенный", 5: "Высокий"},
+    False: {1: "Плохо", 2: "Слабо", 3: "Средне", 4: "Хорошо", 5: "Отлично"},
+    True:  {1: "Низкий", 2: "Слабый", 3: "Средний", 4: "Высокий", 5: "Сильный"},
 }
 _RATING_EMOJI: dict[bool, dict[int, str]] = {
     False: {1: "😞", 2: "😕", 3: "😐", 4: "🙂", 5: "😄"},
@@ -339,21 +339,24 @@ _RATING_EMOJI: dict[bool, dict[int, str]] = {
 
 
 def rating_keyboard(prefix: str, reverse: bool = False) -> InlineKeyboardMarkup:
-    """Word-only 1–5 rating row — no numbers, no bar/gauge. The 30-day trend
-    already lives in the diary's chart (handlers/diary.py's _build_diary_chart),
-    so the input step doesn't need to *look* like a scale too; it just needs
-    to be quick and unambiguous to tap. reverse=True swaps the labels for
-    scales where 1 is good (e.g. stress, unlike sleep/energy where 5 is best).
+    """Word-only 1–5 rating, 3 + 2 across two rows — no numbers, no bar/gauge.
+    The 30-day trend already lives in the diary's chart
+    (handlers/diary.py's _build_diary_chart), so the input step doesn't need
+    to *look* like a scale too; it just needs to be quick and unambiguous to
+    tap. Five full words ("Небольшой", "Так себе"...) in one row got clipped
+    to their last letter on a phone-width screen (verified live) — one short
+    emoji+digit per button fit fine before, but real words need the room a
+    single packed row doesn't have. reverse=True swaps the labels for scales
+    where 1 is good (e.g. stress, unlike sleep/energy where 5 is best).
     Values are still stored as 1–5 under the hood — only the button text changed."""
-    return InlineKeyboardMarkup(
-        inline_keyboard=[[
-            InlineKeyboardButton(
-                text=f"{_RATING_EMOJI[reverse][i]} {RATING_WORDS[reverse][i]}",
-                callback_data=f"{prefix}:{i}",
-            )
-            for i in range(1, 6)
-        ]]
-    )
+    buttons = [
+        InlineKeyboardButton(
+            text=f"{_RATING_EMOJI[reverse][i]} {RATING_WORDS[reverse][i]}",
+            callback_data=f"{prefix}:{i}",
+        )
+        for i in range(1, 6)
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=[buttons[:3], buttons[3:]])
 
 
 def bads_taken_keyboard() -> InlineKeyboardMarkup:
