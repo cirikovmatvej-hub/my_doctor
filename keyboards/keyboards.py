@@ -339,16 +339,18 @@ _RATING_EMOJI: dict[bool, dict[int, str]] = {
 
 
 def rating_keyboard(prefix: str, reverse: bool = False) -> InlineKeyboardMarkup:
-    """Word-only 1–5 rating, 3 + 2 across two rows — no numbers, no bar/gauge.
+    """Word-only 1–5 rating, 2 per row (2+2+1) — no numbers, no bar/gauge.
     The 30-day trend already lives in the diary's chart
     (handlers/diary.py's _build_diary_chart), so the input step doesn't need
     to *look* like a scale too; it just needs to be quick and unambiguous to
-    tap. Five full words ("Небольшой", "Так себе"...) in one row got clipped
-    to their last letter on a phone-width screen (verified live) — one short
-    emoji+digit per button fit fine before, but real words need the room a
-    single packed row doesn't have. reverse=True swaps the labels for scales
-    where 1 is good (e.g. stress, unlike sleep/energy where 5 is best).
-    Values are still stored as 1–5 under the hood — only the button text changed."""
+    tap. Five words in one row got clipped to their last letter on a
+    phone-width screen, and even 3-per-row still clipped the 3rd/edge button
+    off-screen — not text-ellipsis, the row itself was too wide and Telegram
+    cut it at the screen edge (verified live both times). 2-per-row is the
+    layout that actually rendered every word in full on that same phone.
+    reverse=True swaps the labels for scales where 1 is good (e.g. stress,
+    unlike sleep/energy where 5 is best). Values are still stored as 1–5
+    under the hood — only the button text changed."""
     buttons = [
         InlineKeyboardButton(
             text=f"{_RATING_EMOJI[reverse][i]} {RATING_WORDS[reverse][i]}",
@@ -356,7 +358,7 @@ def rating_keyboard(prefix: str, reverse: bool = False) -> InlineKeyboardMarkup:
         )
         for i in range(1, 6)
     ]
-    return InlineKeyboardMarkup(inline_keyboard=[buttons[:3], buttons[3:]])
+    return InlineKeyboardMarkup(inline_keyboard=[buttons[0:2], buttons[2:4], buttons[4:5]])
 
 
 def bads_taken_keyboard() -> InlineKeyboardMarkup:
