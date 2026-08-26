@@ -116,7 +116,7 @@ def _course_correlation_text(entries: list, trackings: list) -> str:
     since", not "improved because of" — this is a correlation from the
     user's own logs, not a clinical claim of what caused it."""
     lines = []
-    for _tid, product_key, start_date_str, _status in trackings:
+    for _tid, product_key, start_date_str, _status, _ended_at in trackings:
         start_date = start_date_str[:10]
         before = [e for e in entries if e[0] < start_date]
         after = [e for e in entries if e[0] >= start_date]
@@ -143,21 +143,33 @@ def _course_correlation_text(entries: list, trackings: list) -> str:
     )
 
 
+_STATUS_SUFFIX = {"completed": "✅ завершён", "stopped": "🛑 остановлен"}
+
+
+def _fmt(date_str: str) -> str:
+    return datetime.strptime(date_str[:10], "%Y-%m-%d").strftime("%d.%m.%Y")
+
+
 def _course_start_dates_text(entries: list, trackings: list) -> str:
-    """Plain "course — start date" list for whichever courses started within
-    the plotted window — the dates used to be drawn on the chart itself as
-    vertical markers; moved to caption text instead (dropped from the chart
-    per user feedback: it cluttered the image)."""
+    """Plain "course — start date [— finished date]" list for whichever
+    courses started within the plotted window — the dates used to be drawn
+    on the chart itself as vertical markers; moved to caption text instead
+    (dropped from the chart per user feedback: it cluttered the image)."""
     if not trackings:
         return ""
     date_min, date_max = entries[0][0], entries[-1][0]
     lines = []
-    for _tid, product_key, start_date_str, _status in trackings:
+    for _tid, product_key, start_date_str, status, ended_at in trackings:
         start_date = start_date_str[:10]
         if not (date_min <= start_date <= date_max):
             continue
-        display_date = datetime.strptime(start_date, "%Y-%m-%d").strftime("%d.%m.%Y")
-        lines.append(f"• {_tracking_display_name(product_key)} — {display_date}")
+        line = f"• {_tracking_display_name(product_key)} — начат {_fmt(start_date)}"
+        suffix = _STATUS_SUFFIX.get(status)
+        if suffix:
+            line += f", {suffix}"
+            if ended_at:
+                line += f" {_fmt(ended_at)}"
+        lines.append(line)
 
     if not lines:
         return ""

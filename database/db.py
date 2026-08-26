@@ -170,6 +170,7 @@ async def init_db() -> None:
             ("product_tracking", "last_reminder_1_date", "TEXT"),
             ("product_tracking", "last_reminder_2_date", "TEXT"),
             ("sessions",         "family_member_id",     "INTEGER"),
+            ("product_tracking", "ended_at",              "TEXT"),
         ]
         for table, col, coltype in _migrations:
             try:
@@ -598,7 +599,10 @@ async def stop_tracking(tracking_id: int) -> None:
     """Soft-delete: flips status so it drops out of get_active_trackings and
     the reminder loop, without losing intake_logs history."""
     async with _connect() as db:
-        await db.execute("UPDATE product_tracking SET status='stopped' WHERE id=?", (tracking_id,))
+        await db.execute(
+            "UPDATE product_tracking SET status='stopped', ended_at=? WHERE id=?",
+            (datetime.now().strftime("%Y-%m-%d"), tracking_id),
+        )
         await db.commit()
 
 
@@ -628,8 +632,12 @@ async def complete_finished_trackings() -> list[tuple[int, int, str, int]]:
             rows = await cur.fetchall()
 
         finished = [row for row in rows if row[4] >= row[3]]
+        ended_at = datetime.now().strftime("%Y-%m-%d")
         for tracking_id, *_ in finished:
-            await db.execute("UPDATE product_tracking SET status='completed' WHERE id=?", (tracking_id,))
+            await db.execute(
+                "UPDATE product_tracking SET status='completed', ended_at=? WHERE id=?",
+                (ended_at, tracking_id),
+            )
         await db.commit()
 
     return [(tid, tg_id, key, days) for tid, tg_id, key, days, _ in finished]
@@ -653,7 +661,7 @@ async def get_all_trackings(user_id: int) -> list:
     only cover one status subset."""
     async with _connect() as db:
         async with db.execute(
-            "SELECT id, product_key, start_date, status "
+            "SELECT id, product_key, start_date, status, ended_at "
             "FROM product_tracking WHERE user_id=? ORDER BY start_date",
             (user_id,),
         ) as cur:
