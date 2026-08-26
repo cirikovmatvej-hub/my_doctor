@@ -212,11 +212,18 @@ async def _show_goal_recommendations(
     # ── General (non-catalog) supplement card(s) ────────────────────────────
     shown_general_keys = [k for k in general_keys if k not in blocked_general_keys]
     if shown_general_keys:
-        await call.message.answer(
-            "🧪 <b>Ещё варианты, которых нет в нашем каталоге</b>\n\n"
-            "Мы их не продаём, но можем честно рассказать и помочь не забывать о приёме:",
-            parse_mode="HTML",
-        )
+        if shown_bad_keys:
+            intro = (
+                "🧪 <b>Ещё варианты, которых нет в нашем каталоге</b>\n\n"
+                "Мы их не продаём, но можем честно рассказать и помочь не забывать о приёме:"
+            )
+        else:
+            intro = (
+                "🧪 <b>Вот что можно рассмотреть</b>\n\n"
+                "В нашем каталоге для этой цели готового продукта нет, но по этим веществам "
+                "есть данные — честно расскажем и поможем не забывать о приёме:"
+            )
+        await call.message.answer(intro, parse_mode="HTML")
     for general_key in shown_general_keys:
         d = GENERAL_SUPPLEMENTS[general_key]
         card_text = _build_general_card(general_key)
@@ -237,8 +244,13 @@ async def _show_goal_recommendations(
         )
         return
 
-    closing = "Нажмите <b>«🔔 Начать курс»</b>"
+    button_labels = []
+    if shown_bad_keys:
+        button_labels.append("«🔔 Начать курс»")
     if shown_general_keys:
-        closing += " или <b>«🔔 Отслеживать приём»</b>"
-    closing += " под нужным вариантом, чтобы я напоминал вам о приёме.\n\nИли вернитесь в главное меню 👇"
+        button_labels.append("«🔔 Отслеживать приём»")
+    closing = (
+        f"Нажмите {' или '.join(button_labels)} под нужным вариантом, чтобы я напоминал "
+        "вам о приёме.\n\nИли вернитесь в главное меню 👇"
+    )
     await call.message.answer(closing, parse_mode="HTML", reply_markup=main_menu())

@@ -169,15 +169,17 @@ def bad_goals_keyboard(suggested_keys: list[str] | None = None) -> InlineKeyboar
     ordered_keys = [k for k in suggested_keys if k in BAD_GOALS] + [
         k for k in BAD_GOALS if k not in suggested_keys
     ]
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(
-                text=("⭐ " if key in suggested_keys else "") + BAD_GOALS[key]["label"],
-                callback_data=f"badgoal:{key}",
-            )]
-            for key in ordered_keys
-        ]
-    )
+    buttons = [
+        InlineKeyboardButton(
+            text=("⭐ " if key in suggested_keys else "") + BAD_GOALS[key]["label"],
+            callback_data=f"badgoal:{key}",
+        )
+        for key in ordered_keys
+    ]
+    # Two per row — with 10 goals now (was 4), one-per-row made for a lot of
+    # scrolling before the user even sees the last option.
+    rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def goal_clarify_keyboard(goal_key: str, options: list[tuple[str, str]]) -> InlineKeyboardMarkup:
