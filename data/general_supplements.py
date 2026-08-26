@@ -51,14 +51,14 @@ GENERAL_SUPPLEMENTS: dict[str, dict] = {
     },
     "zinc": {
         "label": "цинк",
-        "indication_terms": ["цинк", "вкус", "запах", "заживлен", "выпадение волос"],
+        "indication_terms": ["цинк", "вкус", "запах", "заживлен", "выпадени"],
         "goal": "поддержка иммунитета и заживления; классическая гипотеза при сочетании изменения вкуса/запаха, выпадения волос, плохого заживления ран и кожных высыпаний",
         "notes": "Постоянные высокие дозы цинка (выше рекомендованных) могут приводить к дефициту меди — не превышайте дозировку без назначения врача.",
         "pregnancy_safe": True,
     },
     "probiotics": {
         "label": "пробиотики",
-        "indication_terms": ["пробиотик", "микрофлор", "дисбактериоз", "вздутие"],
+        "indication_terms": ["пробиотик", "микрофлор", "дисбактериоз", "вздути"],
         "goal": "поддержка микрофлоры кишечника, часто после курса антибиотиков или при нарушениях пищеварения",
         "notes": None,
         "pregnancy_safe": False,
@@ -79,7 +79,7 @@ GENERAL_SUPPLEMENTS: dict[str, dict] = {
     },
     "calcium": {
         "label": "кальций",
-        "indication_terms": ["кальций", "кости", "остеопороз"],
+        "indication_terms": ["кальци", "кости", "остеопороз"],
         "goal": "поддержка костей, особенно при риске остеопороза",
         "notes": None,
         "pregnancy_safe": True,
@@ -128,7 +128,7 @@ GENERAL_SUPPLEMENTS: dict[str, dict] = {
     },
     "potassium": {
         "label": "калий",
-        "indication_terms": ["калий", "судорог в ногах"],
+        "indication_terms": ["кали", "судорог в ногах"],
         "goal": "коррекция дефицита калия — обычно только по назначению врача после анализа крови",
         "notes": None,
         "pregnancy_safe": True,
@@ -149,7 +149,7 @@ GENERAL_SUPPLEMENTS: dict[str, dict] = {
     },
     "ashwagandha": {
         "label": "ашваганда",
-        "indication_terms": ["ашваганда", "витания"],
+        "indication_terms": ["ашваганд", "витани"],
         "goal": "адаптоген, иногда используется при стрессе — доказательная база ограниченная",
         "notes": "В традиционной медицине упоминается как средство с абортивным потенциалом — не рекомендуется при беременности.",
         "pregnancy_safe": False,
@@ -177,7 +177,7 @@ GENERAL_SUPPLEMENTS: dict[str, dict] = {
     },
     "curcumin": {
         "label": "куркумин",
-        "indication_terms": ["куркумин", "куркума"],
+        "indication_terms": ["куркумин", "куркум"],
         "goal": "противовоспалительная поддержка в виде концентрированной добавки (не как специя в еде)",
         "notes": None,
         "pregnancy_safe": False,
@@ -643,11 +643,25 @@ def list_general_supplements() -> dict:
 
 
 def mentions_a_general_supplement_by_name(text: str | None) -> bool:
-    """Does the text name one of the 27 supplements directly (e.g. "стоит ли
-    пить омега-3")? Used to force tool-calling for informational questions,
+    """Does the text plausibly reference one of the 27 supplements — by name
+    or by a typical indication word (e.g. "стоит ли пить омега-3", "слышал
+    про ашвагандху")? Used to force tool-calling for informational questions,
     same reasoning as mentions_a_product_by_name in data.bad_safety — a
-    prompt instruction alone doesn't reliably trigger the tool call."""
-    return resolve_general_supplement_key(text) is not None
+    prompt instruction alone doesn't reliably trigger the tool call.
+
+    Deliberately checks the full indication_terms list, not just
+    resolve_general_supplement_key's stricter label match: a raw user
+    message inflects Russian nouns ("ашвагандху", "кальция") in ways the
+    model's own tool-derived output never does, so the label-only check
+    that's correct for parsing *model output* would miss real mentions here."""
+    if not text:
+        return False
+    haystack = _normalize(text)
+    return any(
+        _indication_term_matches(term, haystack)
+        for entry in GENERAL_SUPPLEMENTS.values()
+        for term in entry["indication_terms"]
+    )
 
 
 def resolve_general_supplement_key(text: str | None) -> str | None:
