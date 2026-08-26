@@ -318,15 +318,32 @@ def intake_keyboard(tracking_id: int, time_of_day: str) -> InlineKeyboardMarkup:
 
 # ── Diary ─────────────────────────────────────────────────────────────────
 
+# Word only, no emoji — the plain label diary.py's confirmation lines reuse
+# after each tap (e.g. "😴 Сон: Хорошо"), so there's one source of truth
+# instead of the keyboard and the confirmation text drifting apart.
+RATING_WORDS: dict[bool, dict[int, str]] = {
+    False: {1: "Плохо", 2: "Так себе", 3: "Средне", 4: "Хорошо", 5: "Отлично"},
+    True:  {1: "Спокойно", 2: "Слегка", 3: "Средне", 4: "Заметно", 5: "Сильно"},
+}
+_RATING_EMOJI: dict[bool, dict[int, str]] = {
+    False: {1: "😞", 2: "😕", 3: "😐", 4: "🙂", 5: "😄"},
+    True:  {1: "😌", 2: "🙂", 3: "😐", 4: "😟", 5: "😰"},
+}
+
+
 def rating_keyboard(prefix: str, reverse: bool = False) -> InlineKeyboardMarkup:
-    """1–5 rating row. reverse=True for scales where 1 is good (e.g. stress)."""
-    if reverse:
-        labels = {1: "😌 1", 2: "🙂 2", 3: "😐 3", 4: "😟 4", 5: "😰 5"}
-    else:
-        labels = {1: "😞 1", 2: "😕 2", 3: "😐 3", 4: "😊 4", 5: "😄 5"}
+    """Word-only 1–5 rating row — no numbers, no bar/gauge. The 30-day trend
+    already lives in the diary's chart (handlers/diary.py's _build_diary_chart),
+    so the input step doesn't need to *look* like a scale too; it just needs
+    to be quick and unambiguous to tap. reverse=True swaps the labels for
+    scales where 1 is good (e.g. stress, unlike sleep/energy where 5 is best).
+    Values are still stored as 1–5 under the hood — only the button text changed."""
     return InlineKeyboardMarkup(
         inline_keyboard=[[
-            InlineKeyboardButton(text=labels[i], callback_data=f"{prefix}:{i}")
+            InlineKeyboardButton(
+                text=f"{_RATING_EMOJI[reverse][i]} {RATING_WORDS[reverse][i]}",
+                callback_data=f"{prefix}:{i}",
+            )
             for i in range(1, 6)
         ]]
     )

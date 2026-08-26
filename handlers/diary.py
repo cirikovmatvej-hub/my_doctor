@@ -34,7 +34,7 @@ from database.db import (
     get_or_create_user,
     save_diary_entry,
 )
-from keyboards.keyboards import bads_taken_keyboard, main_menu, rating_keyboard
+from keyboards.keyboards import RATING_WORDS, bads_taken_keyboard, main_menu, rating_keyboard
 
 router = Router()
 
@@ -54,11 +54,6 @@ class DiaryState(StatesGroup):
 
 def _today() -> str:
     return datetime.now().strftime("%Y-%m-%d")
-
-
-def _bar(value: int, max_val: int = 5) -> str:
-    filled = round(value / max_val * 5)
-    return "█" * filled + "░" * (5 - filled)
 
 
 _METRIC_COLORS = {"sleep": "#4C72B0", "energy": "#DD8452", "stress": "#C44E52"}
@@ -200,9 +195,9 @@ async def cmd_diary(message: Message, state: FSMContext) -> None:
         await message.answer(
             "📔 <b>Дневник самочувствия</b>\n\n"
             "Запись на сегодня уже есть ✅\n\n"
-            f"😴 Сон: {_bar(sleep_val)} {sleep_val}/5\n"
-            f"⚡ Энергия: {_bar(energy_val)} {energy_val}/5\n"
-            f"😤 Стресс: {_bar(stress_val)} {stress_val}/5\n"
+            f"😴 Сон: {RATING_WORDS[False][sleep_val]}\n"
+            f"⚡ Энергия: {RATING_WORDS[False][energy_val]}\n"
+            f"😤 Стресс: {RATING_WORDS[True][stress_val]}\n"
             f"💊 БАД: {bads_icon}",
             parse_mode="HTML",
             reply_markup=main_menu(),
@@ -216,8 +211,7 @@ async def cmd_diary(message: Message, state: FSMContext) -> None:
 
     await message.answer(
         "📔 <b>Новая запись в дневник</b>\n\n"
-        "😴 <b>Качество сна прошлой ночью?</b>\n"
-        "<i>1 — очень плохо, 5 — отлично</i>",
+        "😴 <b>Качество сна прошлой ночью?</b>",
         parse_mode="HTML",
         reply_markup=rating_keyboard("diary:sleep"),
     )
@@ -232,9 +226,8 @@ async def cb_sleep(call: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(DiaryState.energy)
 
     await call.message.edit_text(
-        f"😴 Сон: {_bar(value)} ({value}/5)\n\n"
-        "⚡ <b>Уровень энергии сегодня?</b>\n"
-        "<i>1 — нет сил совсем, 5 — полон энергии</i>",
+        f"😴 Сон: {RATING_WORDS[False][value]}\n\n"
+        "⚡ <b>Уровень энергии сегодня?</b>",
         parse_mode="HTML",
         reply_markup=rating_keyboard("diary:energy"),
     )
@@ -250,9 +243,8 @@ async def cb_energy(call: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(DiaryState.stress)
 
     await call.message.edit_text(
-        f"⚡ Энергия: {_bar(value)} ({value}/5)\n\n"
-        "😤 <b>Уровень стресса сегодня?</b>\n"
-        "<i>1 — полный покой, 5 — очень высокий стресс</i>",
+        f"⚡ Энергия: {RATING_WORDS[False][value]}\n\n"
+        "😤 <b>Уровень стресса сегодня?</b>",
         parse_mode="HTML",
         reply_markup=rating_keyboard("diary:stress", reverse=True),
     )
@@ -268,7 +260,7 @@ async def cb_stress(call: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(DiaryState.bads)
 
     await call.message.edit_text(
-        f"😤 Стресс: {_bar(value)} ({value}/5)\n\n"
+        f"😤 Стресс: {RATING_WORDS[True][value]}\n\n"
         "💊 <b>Принимали ли вы БАД сегодня?</b>",
         parse_mode="HTML",
         reply_markup=bads_taken_keyboard(),
@@ -304,9 +296,9 @@ async def cb_bads(call: CallbackQuery, state: FSMContext) -> None:
     bads_icon = "✅ Да" if bads_taken else "❌ Нет"
     await call.message.edit_text(
         "✅ <b>Запись сохранена!</b>\n\n"
-        f"😴 Сон:    {_bar(sleep_val)} {sleep_val}/5\n"
-        f"⚡ Энергия: {_bar(energy_val)} {energy_val}/5\n"
-        f"😤 Стресс:  {_bar(stress_val)} {stress_val}/5\n"
+        f"😴 Сон: {RATING_WORDS[False][sleep_val]}\n"
+        f"⚡ Энергия: {RATING_WORDS[False][energy_val]}\n"
+        f"😤 Стресс: {RATING_WORDS[True][stress_val]}\n"
         f"💊 БАД: {bads_icon}\n\n"
         "<i>Продолжайте вести дневник — наблюдение за динамикой поможет "
         "заметить реальный прогресс от приёма БАД!</i>",
