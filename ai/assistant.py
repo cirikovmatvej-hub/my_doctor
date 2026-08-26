@@ -122,13 +122,30 @@ bad_recommendation — ТОЛЬКО при lifestyle-проблемах (не п
      рекомендацию, но обязательно упомяни их простыми словами в тексте ответа.
 
 general_supplement_suggestion — если для lifestyle-проблемы идеально подошла бы добавка,
-которой НЕТ в нашем каталоге (например: железо, омега-3, витамин B12, пробиотики,
-хондроитин+глюкозамин) — укажи её здесь простыми словами, без вызова инструментов
-(они знают только о нашем каталоге). Никогда не указывай здесь название БАД из нашего
-каталога (magnesium/collagen/vitamin_d3), даже если check_bad_safety его заблокировал.
-ВАЖНО: НЕ пытайся подогнать проблему под наш каталог, если она ему на самом деле не
-соответствует — честная рекомендация важнее продажи нашего продукта. Если general_supplement_suggestion
-заполнен, bad_recommendation должен быть null, и наоборот.
+которой НЕТ в нашем каталоге (magnesium/collagen/vitamin_d3) — но которая ЕСТЬ в более
+широком справочнике из 27 веществ (железо, омега-3, витамин B12, цинк, пробиотики,
+хондроитин+глюкозамин, витамины A/B6/C/E/D-группы, калий, кальций, селен, йод,
+мелатонин, коэнзим Q10, ашваганда, альфа-липоевая кислота, L-карнитин, креатин,
+куркумин, зверобой, гинкго билоба, биотин, валериана, 5-HTP и др.) — работай с ней так
+же строго, как с bad_recommendation:
+  1. Вызови list_general_supplements — узнай реальный список и поля goal/notes. Никогда
+     не пиши название добавки от себя — только то, что вернул этот инструмент (поле name).
+  2. Сравни жалобу пользователя ТОЛЬКО с полем goal, которое вернул инструмент — тем же
+     правилом, что и для bad_recommendation: не придумывай показаний, которых там нет.
+  3. Если подходит — вызови check_general_supplement_safety(general_key) для ЭТОГО
+     пациента.
+  4. Если вернулись warnings с kind="contraindication" — НЕ указывай эту добавку, упомяни
+     риск в тексте и направь к врачу. Предупреждения с kind="caution"/"interaction"/
+     "general_caution" не запрещают, но обязательно упомяни их в тексте простыми словами.
+  5. Если ни один из 27 не подходит, но ты уверен в другой добавке (например, из
+     клинической логики симптомов, которую справочник не покрывает) — можно назвать её
+     свободным текстом, как раньше, БЕЗ вызова инструментов. Это исключение, а не
+     дефолт — сначала всегда проверяй список из инструмента.
+Никогда не указывай здесь название БАД из нашего каталога (magnesium/collagen/vitamin_d3),
+даже если check_bad_safety его заблокировал. ВАЖНО: НЕ пытайся подогнать проблему под
+каталог или справочник, если она им на самом деле не соответствует — честная рекомендация
+важнее. Если general_supplement_suggestion заполнен, bad_recommendation должен быть null,
+и наоборот.
 
 is_lifestyle — true если это проблема образа жизни/самочувствия, false если острая медицинская ситуация
 
@@ -256,7 +273,12 @@ def _build_system(
     return SYSTEM_PROMPT + profile_note
 
 
-MAX_TOOL_ROUNDS = 3
+# 4, not 3: with both the BAD catalog and the general-supplements knowledge
+# base now in play, a full check can need list+check for each (up to 4 tool
+# calls) before a final answer — most models batch same-round calls so 3
+# would often suffice, but the extra round is cheap headroom against a model
+# that calls tools one at a time.
+MAX_TOOL_ROUNDS = 4
 
 _ENGLISH_WORD_RE = re.compile(r"\b[a-zA-Z]{3,}\b")
 
@@ -265,6 +287,23 @@ def _contains_stray_english(text: str) -> bool:
     """The 'пиши только на русском' prompt rule alone isn't reliably followed —
     this is a deterministic backstop, same pattern as bad_recommendation grounding."""
     return bool(_ENGLISH_WORD_RE.search(text or ""))
+
+
+def _enforce_safety_checked(parsed: dict, field: str, key: str | None, safety_results: dict) -> str | None:
+    """A recommendation the model never actually ran a safety check for, or
+    that the check flagged as kind="contraindication", doesn't get shown —
+    a hard stop in code rather than trusting the prompt instruction (step 3/4
+    of the bad_recommendation/general_supplement_suggestion rules) alone,
+    since the model can skip the tool call the same way it skips other
+    prompt-only rules elsewhere in this file."""
+    if not key:
+        return None
+    safety = safety_results.get(key)
+    if safety is None or any(w["kind"] == "contraindication" for w in safety["warnings"]):
+        logging.warning(f"{field}={key!r} has no safety check or a contraindication — dropping")
+        parsed[field] = None
+        return None
+    return key
 
 
 async def _run_tool_loop(
@@ -288,23 +327,29 @@ async def _run_tool_loop(
     """
     from ai.tools import TOOL_SCHEMAS, execute_tool
     from data.bad_safety import mentions_a_product_by_name
+    from data.general_supplements import mentions_a_general_supplement_by_name
 
     extra_body = {"reasoning_format": reasoning_format} if reasoning_format else None
 
-    # Keyed by bad_key — captured as the model calls check_bad_safety, so the
-    # final warnings can be attached to the response deterministically instead
-    # of trusting the model to relay them in its free-text answer.
+    # Keyed by bad_key/general_key — captured as the model calls
+    # check_bad_safety/check_general_supplement_safety, so the final warnings
+    # can be attached to the response deterministically instead of trusting
+    # the model to relay them in its free-text answer.
     safety_results: dict[str, dict] = {}
+    general_safety_results: dict[str, dict] = {}
 
-    # The model doesn't reliably call list_bads_catalog on prompt instruction
-    # alone for informational questions ("когда лучше принимать d3?" — verified
-    # live) — force a tool call on the first round when the user names one of
-    # our products directly, instead of trusting it to decide to look it up.
+    # The model doesn't reliably call list_bads_catalog/list_general_supplements
+    # on prompt instruction alone for informational questions ("когда лучше
+    # принимать d3?" — verified live) — force a tool call on the first round
+    # when the user names one of our products or a known general supplement
+    # directly, instead of trusting it to decide to look it up.
     user_text = " ".join(
         m["content"] for m in chat_messages
         if m.get("role") == "user" and isinstance(m.get("content"), str)
     )
-    force_first_tool_call = mentions_a_product_by_name(user_text)
+    force_first_tool_call = (
+        mentions_a_product_by_name(user_text) or mentions_a_general_supplement_by_name(user_text)
+    )
 
     msg = None
     for round_num in range(MAX_TOOL_ROUNDS):
@@ -341,6 +386,8 @@ async def _run_tool_loop(
             result = execute_tool(tc.function.name, args, profile)
             if tc.function.name == "check_bad_safety" and "bad_key" in result:
                 safety_results[result["bad_key"]] = result
+            if tc.function.name == "check_general_supplement_safety" and "general_key" in result:
+                general_safety_results[result["general_key"]] = result
             chat_messages.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
@@ -489,9 +536,43 @@ async def _run_tool_loop(
             parsed = corrected
             bad_key = parsed.get("bad_recommendation")
 
+    from data.general_supplements import is_general_supplement_grounded, resolve_general_supplement_key
+
+    general_key = resolve_general_supplement_key(parsed.get("general_supplement_suggestion"))
+    if general_key and not is_general_supplement_grounded(general_key, complaint_text):
+        logging.warning(
+            f"Ungrounded general_supplement_suggestion={general_key!r} for {complaint_text!r}, asking for a rewrite"
+        )
+        corrected = await _ask_for_rewrite(
+            f"Проверка показала: '{general_key}' на самом деле не входит в реальные "
+            f"показания этой добавки (поле goal из list_general_supplements) для описанной "
+            f"жалобы — не придумывай механизм, которого там нет. Перепиши ответ: НЕ упоминай "
+            f"эту добавку и не утверждай, что она поможет при этой жалобе. Если действительно "
+            f"подходит другая добавка — укажи её, иначе оставь general_supplement_suggestion "
+            f"null. Ответь тем же JSON-форматом, без вызова инструментов."
+        )
+        if corrected is not None:
+            parsed = corrected
+            general_key = resolve_general_supplement_key(parsed.get("general_supplement_suggestion"))
+        else:
+            parsed["general_supplement_suggestion"] = None
+            general_key = None
+
+    # Hard stop, not just a prompt rule: a recommendation the model never ran
+    # a safety check for, or that check flagged as contraindicated, gets
+    # dropped in code either way.
+    bad_key = _enforce_safety_checked(parsed, "bad_recommendation", bad_key, safety_results)
+    general_key = _enforce_safety_checked(
+        parsed, "general_supplement_suggestion", general_key, general_safety_results
+    )
+
     safety = safety_results.get(bad_key) if bad_key else None
     if safety and safety["warnings"]:
         parsed["_grounded_safety_warnings"] = [w["message"] for w in safety["warnings"]]
+
+    general_safety = general_safety_results.get(general_key) if general_key else None
+    if general_safety and general_safety["warnings"]:
+        parsed["_grounded_general_safety_warnings"] = [w["message"] for w in general_safety["warnings"]]
 
     return parsed
 
@@ -756,6 +837,9 @@ def build_recommendation_message(ai_response: dict) -> str:
             "💊 <b>Может помочь:</b>",
             f"{general_suggestion} — перед началом приёма в любом случае посоветуйтесь с врачом.",
         ]
+        grounded_general_warnings = ai_response.get("_grounded_general_safety_warnings")
+        if grounded_general_warnings:
+            parts += [""] + [f"⚠️ {w}" for w in grounded_general_warnings]
 
     parts += ["", RECOMMENDATION_DISCLAIMER]
 
