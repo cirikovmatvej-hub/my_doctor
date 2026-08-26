@@ -98,6 +98,19 @@ async def cmd_bad_advisor(message: Message, state: FSMContext) -> None:
     )
 
 
+@router.callback_query(F.data.startswith("badgoalpage:"))
+async def cb_goal_page(call: CallbackQuery) -> None:
+    page_str = call.data.split(":")[1]
+    if page_str == "noop":
+        await call.answer()
+        return
+
+    profile = await get_user_profile(call.from_user.id)
+    suggested = suggest_goal_keys(profile)
+    await call.message.edit_reply_markup(reply_markup=bad_goals_keyboard(suggested, page=int(page_str)))
+    await call.answer()
+
+
 @router.callback_query(F.data.startswith("badgoal:"))
 async def cb_goal_selected(call: CallbackQuery, state: FSMContext) -> None:
     goal_key = call.data.split(":")[1]

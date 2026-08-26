@@ -162,23 +162,43 @@ def followup_keyboard(session_id: int) -> InlineKeyboardMarkup:
 
 # ── BAD advisor ───────────────────────────────────────────────────────────
 
-def bad_goals_keyboard(suggested_keys: list[str] | None = None) -> InlineKeyboardMarkup:
+BAD_GOALS_PAGE_SIZE = 5
+
+
+def bad_goals_keyboard(suggested_keys: list[str] | None = None, page: int = 0) -> InlineKeyboardMarkup:
     from data.resources import BAD_GOALS
 
     suggested_keys = suggested_keys or []
     ordered_keys = [k for k in suggested_keys if k in BAD_GOALS] + [
         k for k in BAD_GOALS if k not in suggested_keys
     ]
-    buttons = [
-        InlineKeyboardButton(
+
+    # One button per row: two-per-row used to truncate longer labels
+    # ("Щитовидная железа и обмен веществ" → "Щит...еществ") since Telegram
+    # inline buttons don't wrap. One per row + pagination keeps every label
+    # fully readable instead.
+    page_count = -(-len(ordered_keys) // BAD_GOALS_PAGE_SIZE)  # ceil div
+    page = max(0, min(page, page_count - 1))
+    start = page * BAD_GOALS_PAGE_SIZE
+    page_keys = ordered_keys[start:start + BAD_GOALS_PAGE_SIZE]
+
+    rows = [
+        [InlineKeyboardButton(
             text=("⭐ " if key in suggested_keys else "") + BAD_GOALS[key]["label"],
             callback_data=f"badgoal:{key}",
-        )
-        for key in ordered_keys
+        )]
+        for key in page_keys
     ]
-    # Two per row — with 10 goals now (was 4), one-per-row made for a lot of
-    # scrolling before the user even sees the last option.
-    rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+
+    if page_count > 1:
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"badgoalpage:{page - 1}"))
+        nav_row.append(InlineKeyboardButton(text=f"{page + 1}/{page_count}", callback_data="badgoalpage:noop"))
+        if page < page_count - 1:
+            nav_row.append(InlineKeyboardButton(text="Далее ▶️", callback_data=f"badgoalpage:{page + 1}"))
+        rows.append(nav_row)
+
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
