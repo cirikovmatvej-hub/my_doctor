@@ -15,7 +15,7 @@ from aiogram.types import (
 # free-text FSM input needs to reject an accidental menu-button press instead
 # of swallowing it as data (e.g. tracker.py's "enter a custom BAD name" step).
 MAIN_MENU_LABELS: frozenset[str] = frozenset({
-    "🩺 Анализ симптомов",
+    "🤖 Консультация с ИИ",
     "💊 Подбор БАД",
     "📊 Мой трекер",
     "📔 Дневник",
@@ -28,7 +28,7 @@ MAIN_MENU_LABELS: frozenset[str] = frozenset({
 def main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="🩺 Анализ симптомов")],
+            [KeyboardButton(text="🤖 Консультация с ИИ")],
             [KeyboardButton(text="💊 Подбор БАД"), KeyboardButton(text="📊 Мой трекер")],
             [KeyboardButton(text="📔 Дневник"),    KeyboardButton(text="📋 История")],
             [KeyboardButton(text="👨‍👩‍👧 Семья"),    KeyboardButton(text="⚙️ Мой профиль")],
@@ -45,7 +45,7 @@ async def bail_if_menu_button(message: Message, state: FSMContext) -> bool:
     """If the user pressed a main-menu button while stuck in an unrelated
     free-text FSM step, exit that flow instead of swallowing the button label
     as data (e.g. a "supplement" or family member literally named
-    "🩺 Анализ симптомов"). Call at the top of any free-text state handler;
+    "🤖 Консультация с ИИ"). Call at the top of any free-text state handler;
     if this returns True, the caller should return immediately."""
     if message.text in MAIN_MENU_LABELS:
         await state.clear()

@@ -129,7 +129,7 @@ async def _init_for_member(message: Message, state: FSMContext, member: dict) ->
     )
 
 
-@router.message(F.text == "🩺 Анализ симптомов")
+@router.message(F.text == "🤖 Консультация с ИИ")
 async def start_consultation(message: Message, state: FSMContext) -> None:
     await state.clear()
     user_id = await get_or_create_user(message.from_user.id, message.from_user.username)

@@ -479,7 +479,7 @@ async def _finish_member(msg: Message, state: FSMContext) -> None:
 
     await msg.answer(
         f"✅ Профиль <b>{name}</b> сохранён!\n\n{summary}\n\n"
-        "Теперь при нажатии «🩺 Анализ симптомов» бот спросит, "
+        "Теперь при нажатии «🤖 Консультация с ИИ» бот спросит, "
         "для кого консультация — для вас или для кого-то из семьи.",
         parse_mode="HTML",
         reply_markup=main_menu(),
