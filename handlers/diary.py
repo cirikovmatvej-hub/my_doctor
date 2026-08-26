@@ -15,6 +15,7 @@ Flow:
 """
 import asyncio
 import io
+import re
 from datetime import datetime
 
 import matplotlib
@@ -64,8 +65,28 @@ _METRIC_COLORS = {"sleep": "#4C72B0", "energy": "#DD8452", "stress": "#C44E52"}
 _METRIC_LABELS = {"sleep": "Сон", "energy": "Энергия", "stress": "Стресс"}
 
 
+_CHART_LABEL_MAX_LEN = 22
+# Matplotlib's font (DejaVu Sans) can't render emoji — a custom (non-catalog)
+# tracking name that happens to contain one would show as a missing-glyph
+# box on the chart. Catalog/general-supplement names are our own curated
+# text and never contain emoji, but a custom name is arbitrary user input.
+_EMOJI_RE = re.compile(
+    "[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF\U00002B00-\U00002BFF]+"
+)
+
+
 def _tracking_display_name(product_key: str) -> str:
     return BAD_DETAILS.get(product_key, {}).get("full_name", product_key)
+
+
+def _chart_label(name: str) -> str:
+    """Shorten a tracking name for the chart's rotated course-start label —
+    the full catalog name ("Коллаген комплекс + вит. С, 120 капсул") is too
+    long to read rotated 90° next to a thin dashed line."""
+    name = _EMOJI_RE.sub("", name).strip()
+    if len(name) > _CHART_LABEL_MAX_LEN:
+        name = name[:_CHART_LABEL_MAX_LEN - 1].rstrip() + "…"
+    return name
 
 
 def _build_diary_chart(entries: list, trackings: list) -> bytes:
@@ -100,12 +121,12 @@ def _build_diary_chart(entries: list, trackings: list) -> bytes:
             continue
         if not (date_min <= start_date <= date_max):
             continue
-        name = _tracking_display_name(product_key)
+        name = _chart_label(_tracking_display_name(product_key))
         ax.axvline(start_date, ymax=0.83, color="#55A868", linestyle="--", alpha=0.6, linewidth=1.5)
         label_key = start_date_str[:10]
         if label_key not in seen_labels:
             ax.annotate(
-                f"> {name}", xy=(start_date, 5.6), rotation=90,
+                name, xy=(start_date, 5.6), rotation=90,
                 fontsize=8, va="bottom", ha="center", color="#55A868",
             )
             seen_labels.add(label_key)
