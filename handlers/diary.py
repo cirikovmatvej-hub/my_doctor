@@ -143,9 +143,31 @@ def _course_correlation_text(entries: list, trackings: list) -> str:
     )
 
 
+def _course_start_dates_text(entries: list, trackings: list) -> str:
+    """Plain "course — start date" list for whichever courses started within
+    the plotted window — the dates used to be drawn on the chart itself as
+    vertical markers; moved to caption text instead (dropped from the chart
+    per user feedback: it cluttered the image)."""
+    if not trackings:
+        return ""
+    date_min, date_max = entries[0][0], entries[-1][0]
+    lines = []
+    for _tid, product_key, start_date_str, _status in trackings:
+        start_date = start_date_str[:10]
+        if not (date_min <= start_date <= date_max):
+            continue
+        display_date = datetime.strptime(start_date, "%Y-%m-%d").strftime("%d.%m.%Y")
+        lines.append(f"• {_tracking_display_name(product_key)} — {display_date}")
+
+    if not lines:
+        return ""
+    return "📅 <b>Начало курсов:</b>\n" + "\n".join(lines)
+
+
 async def _send_trend_chart(message: Message, user_id: int) -> None:
     """Shared by both the 'already filled today' view and right after saving
-    a new entry — the chart plus any before/after course correlation."""
+    a new entry — the chart plus course start dates and any before/after
+    correlation, both as caption text below the photo."""
     entries = await get_diary_entries(user_id, limit=CHART_DAYS)
     if len(entries) < 2:
         return  # a single point isn't a chart worth sending yet
@@ -154,7 +176,11 @@ async def _send_trend_chart(message: Message, user_id: int) -> None:
     trackings = await get_all_trackings(user_id)
 
     chart_bytes = await asyncio.to_thread(_build_diary_chart, entries)
-    caption = _course_correlation_text(entries, trackings) or "📈 Динамика за последние дни"
+    caption_parts = [
+        _course_start_dates_text(entries, trackings),
+        _course_correlation_text(entries, trackings),
+    ]
+    caption = "\n\n".join(p for p in caption_parts if p) or "📈 Динамика за последние дни"
     await message.answer_photo(
         BufferedInputFile(chart_bytes, filename="diary_chart.png"),
         caption=caption,
