@@ -74,25 +74,33 @@ BAD_DETAILS: dict[str, dict] = {
 
 # ── Цели подбора БАД ────────────────────────────────────────────────────────
 
+# general_supplements: keys into data.general_supplements.GENERAL_SUPPLEMENTS —
+# a curated (not exhaustive) subset per goal, picked for being the most
+# commonly recognized options for that goal. Shown as honest info + optional
+# course tracking, never with a buy link — we don't sell these.
 BAD_GOALS: dict[str, dict] = {
     "sleep_stress": {
         "label":       "😴 Сон и стресс",
         "bads":        ["magnesium"],
+        "general_supplements": ["valerian", "melatonin"],
         "description": "Улучшение качества сна, снижение тревожности и раздражительности",
     },
     "energy_immunity": {
         "label":       "⚡ Энергия и иммунитет",
         "bads":        ["vitamin_d3"],
+        "general_supplements": ["vitamin_b12", "iron"],
         "description": "Поддержка иммунитета, борьба с хронической усталостью",
     },
     "beauty": {
         "label":       "✨ Красота кожи и волос",
         "bads":        ["collagen"],
+        "general_supplements": ["biotin", "zinc"],
         "description": "Упругость кожи, здоровые волосы, ногти, суставы",
     },
     "complex": {
         "label":       "🎯 Комплексная поддержка",
         "bads":        ["magnesium", "vitamin_d3", "collagen"],
+        "general_supplements": ["omega3"],
         "description": "Полноценная поддержка организма по всем направлениям",
     },
 }

@@ -3,8 +3,17 @@ BAD Advisor — goal-based supplement recommendation flow.
 
 Flow:
   "💊 Подбор БАД" → goal selection → clarifying question (single-BAD goals only)
-  → safety check → lifestyle tips → BAD card(s)
-  Each BAD card has a "🔔 Начать курс" button → handled by tracker.py
+  → safety check → lifestyle tips → BAD card(s) → general-supplement card(s)
+  Catalog cards have a "🔔 Начать курс" button (with Ozon link) → tracker.py.
+  General-supplement cards (data/general_supplements.py — honest info about
+  things we don't sell) have a "🔔 Отслеживать приём" button instead, which
+  starts the same custom-tracker flow the AI path already uses for
+  general_supplement_suggestion — no purchase link, we don't sell these.
+
+  Either kind is skipped entirely (not just warned) when check_*_safety finds
+  a kind="contraindication" for this patient's profile — same hard rule the
+  AI consultation path enforces, previously this flow only showed a warning
+  above an otherwise-unconditional card.
 """
 import logging
 
@@ -13,14 +22,18 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from data.bad_safety import check_bad_safety, get_bad_synergies, suggest_goal_keys
+from data.general_supplements import GENERAL_SUPPLEMENTS, check_general_supplement_safety
 from data.resources import BAD_DETAILS, BAD_GOALS, BADS, GOAL_CLARIFY_QUESTIONS, LIFESTYLE_TIPS
 from database.db import get_user_profile
-from keyboards.keyboards import bad_goals_keyboard, goal_clarify_keyboard, main_menu, track_start_keyboard
+from keyboards.keyboards import (
+    bad_goals_keyboard, general_supplement_keyboard, goal_clarify_keyboard,
+    main_menu, track_start_keyboard,
+)
 
 router = Router()
 
 
-# ── BAD card builder ──────────────────────────────────────────────────────
+# ── Card builders ────────────────────────────────────────────────────────
 
 def _build_bad_card(bad_key: str) -> str:
     d = BAD_DETAILS[bad_key]
@@ -44,6 +57,24 @@ def _build_bad_card(bad_key: str) -> str:
         )
 
     parts.append(f'\n🛒 <a href="{b["url"]}">Купить на Ozon</a>')
+    return "\n".join(parts)
+
+
+def _build_general_card(general_key: str) -> str:
+    """Same spirit as _build_bad_card but for something we don't sell — no
+    dosage/course/buy link (there's no preset product to point at), just
+    honest goal/notes from the knowledge base and a course-tracking option."""
+    d = GENERAL_SUPPLEMENTS[general_key]
+    parts = [
+        f"💊 <b>{d['label']}</b>\n"
+        f"🎯 {d['goal']}"
+    ]
+    if d.get("notes"):
+        parts.append(f"\n📝 {d['notes']}")
+    parts.append(
+        "\n<i>Мы не продаём этот БАД, но можем помочь не забывать о приёме, "
+        "если решите его пить — просто выберите свою дозировку и время.</i>"
+    )
     return "\n".join(parts)
 
 
@@ -110,23 +141,50 @@ async def _show_goal_recommendations(
     call: CallbackQuery, goal_key: str, extra_note: str | None = None,
 ) -> None:
     goal = BAD_GOALS[goal_key]
+    general_keys = goal.get("general_supplements", [])
 
     # Load health profile for safety check
     profile = await get_user_profile(call.from_user.id)
 
-    # ── Safety warnings ────────────────────────────────────────────────────
-    all_warnings = []
-    for bad_key in goal["bads"]:
-        all_warnings.extend(f"⚠️ {w.message}" for w in check_bad_safety(bad_key, profile))
+    # ── Safety check — split into blocking (contraindication: skip the card
+    # entirely) vs. non-blocking (show a warning above the card) ───────────
+    blocked_bad_keys: set[str] = set()
+    blocked_general_keys: set[str] = set()
+    non_blocking_warnings: list[str] = []
+    blocked_notes: list[str] = []
 
-    if all_warnings:
-        warning_text = (
-            "🔍 <b>Важно!</b> Исходя из вашего профиля здоровья:\n\n"
-            + "\n\n".join(all_warnings)
-            + "\n\n<i>Вы можете продолжить ознакомление с БАД, но при наличии сомнений "
-            "лучше проконсультироваться с врачом.</i>"
+    for bad_key in goal["bads"]:
+        warnings = check_bad_safety(bad_key, profile)
+        if any(w.kind == "contraindication" for w in warnings):
+            blocked_bad_keys.add(bad_key)
+            blocked_notes.extend(f"⛔ {w.message}" for w in warnings if w.kind == "contraindication")
+        else:
+            non_blocking_warnings.extend(f"⚠️ {w.message}" for w in warnings)
+
+    for general_key in general_keys:
+        warnings = check_general_supplement_safety(general_key, profile)
+        if any(w.kind == "contraindication" for w in warnings):
+            blocked_general_keys.add(general_key)
+            blocked_notes.extend(f"⛔ {w.message}" for w in warnings if w.kind == "contraindication")
+        else:
+            non_blocking_warnings.extend(f"⚠️ {w.message}" for w in warnings)
+
+    if blocked_notes:
+        await call.message.answer(
+            "🔍 <b>Важно!</b> Исходя из вашего профиля здоровья, не показываю "
+            "часть вариантов:\n\n" + "\n\n".join(blocked_notes)
+            + "\n\n<i>При наличии сомнений проконсультируйтесь с врачом.</i>",
+            parse_mode="HTML",
         )
-        await call.message.answer(warning_text, parse_mode="HTML")
+
+    if non_blocking_warnings:
+        await call.message.answer(
+            "🔍 <b>Обратите внимание</b> — исходя из вашего профиля здоровья:\n\n"
+            + "\n\n".join(non_blocking_warnings)
+            + "\n\n<i>Это не противопоказание, но при наличии сомнений лучше "
+            "проконсультироваться с врачом.</i>",
+            parse_mode="HTML",
+        )
 
     if extra_note:
         await call.message.answer(f"💬 {extra_note}", parse_mode="HTML")
@@ -140,8 +198,9 @@ async def _show_goal_recommendations(
             parse_mode="HTML",
         )
 
-    # ── BAD card(s) ────────────────────────────────────────────────────────
-    for bad_key in goal["bads"]:
+    # ── Catalog BAD card(s) ─────────────────────────────────────────────────
+    shown_bad_keys = [k for k in goal["bads"] if k not in blocked_bad_keys]
+    for bad_key in shown_bad_keys:
         card_text = _build_bad_card(bad_key)
         await call.message.answer(
             card_text,
@@ -150,9 +209,36 @@ async def _show_goal_recommendations(
             reply_markup=track_start_keyboard(bad_key),
         )
 
-    await call.message.answer(
-        "Нажмите <b>«🔔 Начать курс»</b> под нужным БАД, чтобы я напоминал вам о приёме.\n\n"
-        "Или вернитесь в главное меню 👇",
-        parse_mode="HTML",
-        reply_markup=main_menu(),
-    )
+    # ── General (non-catalog) supplement card(s) ────────────────────────────
+    shown_general_keys = [k for k in general_keys if k not in blocked_general_keys]
+    if shown_general_keys:
+        await call.message.answer(
+            "🧪 <b>Ещё варианты, которых нет в нашем каталоге</b>\n\n"
+            "Мы их не продаём, но можем честно рассказать и помочь не забывать о приёме:",
+            parse_mode="HTML",
+        )
+    for general_key in shown_general_keys:
+        d = GENERAL_SUPPLEMENTS[general_key]
+        card_text = _build_general_card(general_key)
+        await call.message.answer(
+            card_text,
+            parse_mode="HTML",
+            reply_markup=general_supplement_keyboard(d["label"]),
+        )
+
+    # Every option for this goal was contraindicated — no cards were shown at
+    # all, so the usual "нажмите кнопку" closing would be misleading.
+    if not shown_bad_keys and not shown_general_keys:
+        await call.message.answer(
+            "По вашему профилю здоровья ни один из вариантов для этой цели "
+            "показать нельзя — пожалуйста, обсудите подходящую поддержку с врачом.",
+            parse_mode="HTML",
+            reply_markup=main_menu(),
+        )
+        return
+
+    closing = "Нажмите <b>«🔔 Начать курс»</b>"
+    if shown_general_keys:
+        closing += " или <b>«🔔 Отслеживать приём»</b>"
+    closing += " под нужным вариантом, чтобы я напоминал вам о приёме.\n\nИли вернитесь в главное меню 👇"
+    await call.message.answer(closing, parse_mode="HTML", reply_markup=main_menu())
