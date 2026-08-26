@@ -646,6 +646,20 @@ async def get_tracking_history(user_id: int, limit: int = 15) -> list:
             return await cur.fetchall()
 
 
+async def get_all_trackings(user_id: int) -> list:
+    """Every tracking regardless of status (active/completed/stopped) — used
+    by the diary chart to mark course-start dates and compute before/after
+    correlation, unlike get_active_trackings/get_tracking_history which each
+    only cover one status subset."""
+    async with _connect() as db:
+        async with db.execute(
+            "SELECT id, product_key, start_date, status "
+            "FROM product_tracking WHERE user_id=? ORDER BY start_date",
+            (user_id,),
+        ) as cur:
+            return await cur.fetchall()
+
+
 async def log_intake(tracking_id: int, log_date: str, time_of_day: str, status: str) -> None:
     async with _connect() as db:
         await db.execute(
