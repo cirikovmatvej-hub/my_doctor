@@ -3,6 +3,7 @@ import logging
 
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import BotCommand
 
 from config import BOT_TOKEN
 from database.db import init_db
@@ -20,6 +21,13 @@ async def main() -> None:
 
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
+
+    # Registering at least one command is what makes Telegram show the blue
+    # "Menu" pill next to the message input — without this call it never
+    # appears, regardless of whether a command handler exists.
+    await bot.set_my_commands([
+        BotCommand(command="start", description="🏠 Главное меню"),
+    ])
 
     # Router order matters: more specific routers first
     dp.include_router(start.router)
