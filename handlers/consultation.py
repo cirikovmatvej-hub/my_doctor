@@ -30,8 +30,8 @@ from database.db import (
 )
 from handlers.appointment import schedule_appointment_followup
 from keyboards.keyboards import (
-    MAIN_MENU_LABELS, consult_for_keyboard, general_supplement_keyboard,
-    main_menu, remove_keyboard, track_start_keyboard,
+    MAIN_MENU_LABELS, bail_if_menu_button, consult_for_keyboard,
+    general_supplement_keyboard, main_menu, track_start_keyboard,
 )
 
 router = Router()
@@ -111,7 +111,7 @@ async def _init_for_self(message: Message, state: FSMContext) -> None:
     )
     await message.answer(
         "Расскажите, что вас беспокоит? Опишите симптомы в свободной форме 👇",
-        reply_markup=remove_keyboard(),
+        reply_markup=main_menu(),
     )
 
 
@@ -125,7 +125,7 @@ async def _init_for_member(message: Message, state: FSMContext, member: dict) ->
     await message.answer(
         f"Консультирую <b>{member['name']}</b>. Расскажите, что беспокоит? 👇",
         parse_mode="HTML",
-        reply_markup=remove_keyboard(),
+        reply_markup=main_menu(),
     )
 
 
@@ -157,6 +157,9 @@ async def cb_consult_for(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(Consultation.active, F.text)
 async def handle_symptom(message: Message, state: FSMContext) -> None:
+    if await bail_if_menu_button(message, state):
+        return
+
     data = await state.get_data()
     messages: list[dict] = data.get("messages", [])
     question_count: int = data.get("question_count", 0)
