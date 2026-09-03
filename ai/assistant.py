@@ -367,7 +367,30 @@ async def _run_tool_loop(
         )
         if extra_body:
             kwargs["extra_body"] = extra_body
-        response = await client.chat.completions.create(**kwargs)
+        try:
+            response = await client.chat.completions.create(**kwargs)
+        except Exception as e:
+            # Groq can 400 an entire round — either its own JSON-mode
+            # validation on an empty generation, or the model formatting a
+            # tool call as literal "<tool_call>...</tool_call>" text instead
+            # of a real structured call (both verified live) — and unlike a
+            # merely-empty response, an exception here has no `msg` to run
+            # the existing empty-content retry on below; it would otherwise
+            # propagate straight past every other guard in this file into the
+            # generic "техническая ошибка" fallback. Drop tools for one clean
+            # retry: whatever confused it about tool-calling this round,
+            # asking for a direct JSON-only answer sidesteps it.
+            logging.warning(f"Tool-round request failed (round {round_num}): {e}")
+            retry_kwargs = dict(
+                model=model, messages=chat_messages,
+                response_format={"type": "json_object"},
+                temperature=0.3, max_tokens=max_tokens,
+            )
+            if extra_body:
+                retry_kwargs["extra_body"] = extra_body
+            response = await client.chat.completions.create(**retry_kwargs)
+            msg = response.choices[0].message
+            break
         msg = response.choices[0].message
         if not msg.tool_calls:
             break
