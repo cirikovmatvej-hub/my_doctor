@@ -2,11 +2,11 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
-from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand
 
 from config import BOT_TOKEN
 from database.db import init_db
+from database.fsm_storage import SQLiteStorage
 from handlers import consultation, followup, history, profile, start
 from handlers import appointment, bad_advisor, family, tracker, diary
 
@@ -19,8 +19,16 @@ async def main() -> None:
 
     await init_db()
 
+    # SQLite-backed, not aiogram's MemoryStorage — a deploy restart used to
+    # silently wipe every in-progress conversation (verified live: mid-
+    # consultation history vanished after a restart, model then acted like
+    # it was a brand new chat). Same DB file/connection pattern as the rest
+    # of the app, so this doesn't need any new infrastructure.
+    fsm_storage = SQLiteStorage()
+    await fsm_storage.init()
+
     bot = Bot(token=BOT_TOKEN)
-    dp = Dispatcher(storage=MemoryStorage())
+    dp = Dispatcher(storage=fsm_storage)
 
     # Registering at least one command is what makes Telegram show the blue
     # "Menu" pill next to the message input — without this call it never
