@@ -149,12 +149,25 @@ def activity_keyboard() -> InlineKeyboardMarkup:
 
 # ── Follow-up ─────────────────────────────────────────────────────────────
 
-def followup_keyboard(session_id: int) -> InlineKeyboardMarkup:
+def followup_keyboard(session_ids: list[int]) -> InlineKeyboardMarkup:
+    """One keyboard answers for every session_id in the batch — a user with
+    several old sessions due for a check-in gets ONE combined message
+    (handlers/followup.py groups by telegram_id), not one per session.
+
+    Telegram caps callback_data at 64 bytes total, and neither callback
+    handler below actually reads these ids back out (mark_followup_sent
+    already ran when the message was sent, not when it's answered) — so
+    cramming in every id is pure risk for zero benefit. A handful is enough
+    to keep the data recognizable if that ever changes; anything past a
+    dozen or so gets silently dropped rather than risk send_message itself
+    failing on an oversized callback_data for a user with many pending
+    sessions."""
+    ids_csv = ",".join(str(i) for i in session_ids[:12])
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="✅ Стало лучше",        callback_data=f"fu:better:{session_id}"),
-                InlineKeyboardButton(text="🩺 Нужна консультация", callback_data=f"fu:new:{session_id}"),
+                InlineKeyboardButton(text="✅ Стало лучше",        callback_data=f"fu:better:{ids_csv}"),
+                InlineKeyboardButton(text="🩺 Нужна консультация", callback_data=f"fu:new:{ids_csv}"),
             ]
         ]
     )

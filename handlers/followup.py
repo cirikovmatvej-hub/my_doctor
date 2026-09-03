@@ -15,34 +15,65 @@ FOLLOWUP_CHECK_INTERVAL = 1800  # проверяем каждые 30 минут
 
 # ── Background loop ────────────────────────────────────────────────────────
 
+def _short(complaint: str | None) -> str:
+    text = (complaint or "ваша жалоба")[:80]
+    if complaint and len(complaint) > 80:
+        text += "…"
+    return text
+
+
 async def follow_up_loop(bot: Bot) -> None:
-    """Runs forever; sends follow-up messages when their time comes."""
+    """Runs forever; sends follow-up messages when their time comes.
+
+    Grouped by telegram_id: a user can rack up several completed sessions
+    due for a check-in around the same time (e.g. a few test consultations
+    run close together) — that used to fire one near-identical "как
+    самочувствие?" message per session (verified live: 4 in a row). One
+    combined message per user instead, listing every pending complaint."""
     logging.info("Follow-up loop started")
     while True:
         await asyncio.sleep(FOLLOWUP_CHECK_INTERVAL)
         try:
             pending = await get_pending_followups()
-            for session_id, telegram_id, complaint, created_at in pending:
-                date_str = (created_at or "")[:10]
-                short_complaint = (complaint or "ваша жалоба")[:80]
-                if complaint and len(complaint) > 80:
-                    short_complaint += "…"
 
-                text = (
-                    "👋 Добрый день!\n\n"
-                    f"Недавно ({date_str}) вы обращались ко мне с жалобой:\n"
-                    f"<i>«{short_complaint}»</i>\n\n"
-                    "Как вы себя чувствуете сейчас? Помогли ли рекомендации?"
-                )
+            by_user: dict[int, list[tuple[int, str, str]]] = {}
+            for session_id, telegram_id, complaint, created_at in pending:
+                by_user.setdefault(telegram_id, []).append((session_id, complaint, created_at))
+
+            for telegram_id, sessions in by_user.items():
+                session_ids = [s[0] for s in sessions]
+
+                if len(sessions) == 1:
+                    _, complaint, created_at = sessions[0]
+                    date_str = (created_at or "")[:10]
+                    text = (
+                        "👋 Добрый день!\n\n"
+                        f"Недавно ({date_str}) вы обращались ко мне с жалобой:\n"
+                        f"<i>«{_short(complaint)}»</i>\n\n"
+                        "Как вы себя чувствуете сейчас? Помогли ли рекомендации?"
+                    )
+                else:
+                    items = "\n".join(
+                        f"• ({(created_at or '')[:10]}) «{_short(complaint)}»"
+                        for _, complaint, created_at in sessions
+                    )
+                    text = (
+                        "👋 Добрый день!\n\n"
+                        "Недавно вы обращались ко мне с несколькими жалобами:\n"
+                        f"{items}\n\n"
+                        "Как вы себя чувствуете сейчас? Помогли ли рекомендации?"
+                    )
+
                 try:
                     await bot.send_message(
                         telegram_id,
                         text,
                         parse_mode="HTML",
-                        reply_markup=followup_keyboard(session_id),
+                        reply_markup=followup_keyboard(session_ids),
                     )
-                    await mark_followup_sent(session_id)
-                    logging.info(f"Follow-up sent to {telegram_id} (session {session_id})")
+                    for session_id in session_ids:
+                        await mark_followup_sent(session_id)
+                    logging.info(f"Follow-up sent to {telegram_id} (sessions {session_ids})")
                 except Exception as e:
                     logging.warning(f"Could not send follow-up to {telegram_id}: {e}")
         except Exception as e:
