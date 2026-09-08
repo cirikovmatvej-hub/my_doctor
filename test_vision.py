@@ -56,30 +56,6 @@ async def test_vision(model: str):
         return False
 
 
-async def main():
-    vision_models = await list_models()
-
-    # Тестируем все потенциальные vision-модели
-    models_to_test = list(set(vision_models + [
-        "llama-3.2-11b-vision-preview",
-        "llama-3.2-90b-vision-preview",
-        "meta-llama/llama-4-scout-17b-16e-instruct",
-    ]))
-
-    working = []
-    for m in models_to_test:
-        ok = await test_vision(m)
-        if ok:
-            working.append(m)
-
-    print("\n" + "="*50)
-    if working:
-        print(f"✅ Рабочие vision-модели: {working}")
-        print(f"   Рекомендую использовать: {working[0]}")
-    else:
-        print("❌ Ни одна vision-модель не работает на этом Groq-аккаунте.")
-        print("   Решение: используем Google Gemini (бесплатно, отличное vision).")
-
 async def test_url_vision():
     """Тест llama-4-scout с публичным URL картинки."""
     model = "meta-llama/llama-4-scout-17b-16e-instruct"
