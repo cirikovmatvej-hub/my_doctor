@@ -109,6 +109,69 @@ def test_different_keys_are_isolated(tmp_path):
     asyncio.run(run())
 
 
+def test_clearing_data_with_no_state_drops_the_row(tmp_path):
+    """state.clear() calls set_state(key, None) then set_data(key, {}) — the
+    row should be deleted rather than left behind forever, otherwise
+    fsm_storage grows without bound over the life of the bot."""
+    storage = _make_storage(tmp_path)
+    key = StorageKey(bot_id=1, chat_id=100, user_id=200)
+
+    async def run():
+        await storage.init()
+        await storage.set_state(key, _States.active)
+        await storage.set_data(key, {"question_count": 1})
+        await storage.set_state(key, None)
+        await storage.set_data(key, {})
+
+        async with db._connect() as conn:
+            async with conn.execute(
+                "SELECT COUNT(*) FROM fsm_storage WHERE key=?", (
+                    ":".join(str(p) for p in (key.bot_id, key.chat_id, key.user_id, key.thread_id, key.business_connection_id, key.destiny)),
+                )
+            ) as cur:
+                row = await cur.fetchone()
+        assert row[0] == 0
+
+    asyncio.run(run())
+
+
+def test_clearing_data_while_state_still_active_keeps_the_row(tmp_path):
+    """Emptying data without clearing state (a valid mid-flow reset) must not
+    delete the row — the active state still needs to persist."""
+    storage = _make_storage(tmp_path)
+    key = StorageKey(bot_id=1, chat_id=100, user_id=200)
+
+    async def run():
+        await storage.init()
+        await storage.set_state(key, _States.active)
+        await storage.set_data(key, {"question_count": 1})
+        await storage.set_data(key, {})
+        assert await storage.get_state(key) == "_States:active"
+        assert await storage.get_data(key) == {}
+
+    asyncio.run(run())
+
+
+def test_update_data_is_atomic_under_concurrent_calls(tmp_path):
+    """Regression for the lost-update race in BaseStorage's default
+    get->merge->set: two concurrent update_data() calls on the same key must
+    both land, not clobber each other."""
+    storage = _make_storage(tmp_path)
+    key = StorageKey(bot_id=1, chat_id=100, user_id=200)
+
+    async def run():
+        await storage.init()
+        await storage.set_data(key, {})
+        await asyncio.gather(
+            storage.update_data(key, {"a": 1}),
+            storage.update_data(key, {"b": 2}),
+        )
+        final = await storage.get_data(key)
+        assert final == {"a": 1, "b": 2}
+
+    asyncio.run(run())
+
+
 def test_data_survives_a_simulated_process_restart(tmp_path):
     """The entire point of this module: a fresh SQLiteStorage instance
     (standing in for the process restarting on deploy) pointed at the same

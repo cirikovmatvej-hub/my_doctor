@@ -56,12 +56,20 @@ class SQLiteStorage(BaseStorage):
         return row[0] if row else None
 
     async def set_data(self, key: StorageKey, data: dict[str, Any]) -> None:
+        key_str = _key_str(key)
         async with _connect() as db:
             await db.execute(
                 "INSERT INTO fsm_storage (key, state, data) VALUES (?, NULL, ?) "
                 "ON CONFLICT(key) DO UPDATE SET data=excluded.data",
-                (_key_str(key), json.dumps(data, ensure_ascii=False)),
+                (key_str, json.dumps(data, ensure_ascii=False)),
             )
+            if not data:
+                # Mirrors a state.clear() row (state=NULL, data='{}') so the
+                # table doesn't grow forever with dead entries. A row that
+                # still has a state keeps its (now-empty) data instead.
+                await db.execute(
+                    "DELETE FROM fsm_storage WHERE key=? AND state IS NULL", (key_str,)
+                )
             await db.commit()
 
     async def get_data(self, key: StorageKey) -> dict[str, Any]:
@@ -71,6 +79,30 @@ class SQLiteStorage(BaseStorage):
             ) as cur:
                 row = await cur.fetchone()
         return json.loads(row[0]) if row and row[0] else {}
+
+    async def update_data(self, key: StorageKey, data: dict[str, Any]) -> dict[str, Any]:
+        # Overrides BaseStorage's default get→merge→set (three independent
+        # calls, no locking) which can lose an update when two updates for
+        # the same chat race (e.g. a double-tap firing two callbacks close
+        # together). BEGIN IMMEDIATE takes the write lock up front so a
+        # concurrent update_data on the same key serializes instead of
+        # clobbering this one.
+        key_str = _key_str(key)
+        async with _connect() as db:
+            await db.execute("BEGIN IMMEDIATE")
+            async with db.execute(
+                "SELECT data FROM fsm_storage WHERE key=?", (key_str,)
+            ) as cur:
+                row = await cur.fetchone()
+            current = json.loads(row[0]) if row and row[0] else {}
+            current.update(data)
+            await db.execute(
+                "INSERT INTO fsm_storage (key, state, data) VALUES (?, NULL, ?) "
+                "ON CONFLICT(key) DO UPDATE SET data=excluded.data",
+                (key_str, json.dumps(current, ensure_ascii=False)),
+            )
+            await db.commit()
+        return current
 
     async def close(self) -> None:
         pass  # no persistent connection held open — each call opens/closes its own
