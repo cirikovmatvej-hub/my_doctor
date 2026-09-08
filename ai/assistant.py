@@ -4,13 +4,19 @@ import re
 
 from openai import AsyncOpenAI
 
-from config import GROQ_API_KEY, MAX_QUESTIONS, SHOW_DOCTOR_RECOMMENDATIONS
+from config import GROQ_API_KEY, GROQ_MAX_RETRIES, MAX_QUESTIONS, SHOW_DOCTOR_RECOMMENDATIONS
 from data.resources import DOCTORS, BADS
 
 # Groq — бесплатный API, совместимый с OpenAI
+# max_retries: the SDK already retries 429/5xx/connection errors with
+# exponential backoff (honoring Retry-After) on every client.chat.completions
+# .create() call below — this just makes that explicit and raises it a bit
+# above the library default of 2, instead of the transient-failure path
+# relying on an unconfigured default nobody would notice is there.
 client = AsyncOpenAI(
     api_key=GROQ_API_KEY,
     base_url="https://api.groq.com/openai/v1",
+    max_retries=GROQ_MAX_RETRIES,
 )
 
 # Groq has retired every plain (non-reasoning) Llama model we tried — llama-4-scout
@@ -288,11 +294,54 @@ MAX_TOOL_ROUNDS = 4
 
 _ENGLISH_WORD_RE = re.compile(r"\b[a-zA-Z]{3,}\b")
 
+# Russian medical staging/grading routinely keeps Roman numerals as-is
+# ("ожог III степени", "гипертония II-III стадии", "стадия IV") — these are
+# ALL-CAPS letter runs that match _ENGLISH_WORD_RE but aren't English.
+_ROMAN_NUMERAL_RE = re.compile(r"^M{0,4}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$")
+
 
 def _contains_stray_english(text: str) -> bool:
     """The 'пиши только на русском' prompt rule alone isn't reliably followed —
-    this is a deterministic backstop, same pattern as bad_recommendation grounding."""
-    return bool(_ENGLISH_WORD_RE.search(text or ""))
+    this is a deterministic backstop, same pattern as bad_recommendation
+    grounding. Excludes Roman numerals so a legitimate medical staging number
+    doesn't trigger a wasted rewrite round-trip."""
+    for match in _ENGLISH_WORD_RE.finditer(text or ""):
+        word = match.group(0)
+        if word.isupper() and _ROMAN_NUMERAL_RE.match(word):
+            continue
+        return True
+    return False
+
+
+# Mirrors the six EMERGENCY categories named in SYSTEM_PROMPT itself (боль в
+# груди/за грудиной, удушье, потеря сознания, сильное кровотечение, признаки
+# инсульта, суицидальные мысли) — kept as plain substrings, not exact grammar,
+# on purpose.
+_EMERGENCY_PHRASES = (
+    "боль в груди", "боли в груди", "болит в груди", "грудиной",
+    "давит в груди", "жжет в груди", "жжёт в груди",
+    "задыхаюсь", "не могу дышать", "нечем дышать", "удушье",
+    "потеряла сознание", "потерял сознание", "теряю сознание", "без сознания", "обморок",
+    "сильное кровотечение", "кровь не останавливается", "кровотечение не останавливается",
+    "перекосило лицо", "асимметрия лица", "онемела половина лица",
+    "отнялась речь", "не могу говорить", "заплетается язык",
+    "суицид", "покончить с собой", "убить себя", "не хочу жить",
+    "счеты с жизнью", "счёты с жизнью",
+)
+
+
+def _contains_emergency_symptoms(text: str) -> bool:
+    """Deterministic backstop for the EMERGENCY branch: the system prompt tells
+    the model which symptoms mean 'send to an ambulance', but for something
+    this safety-critical the model's own judgment can't be the only line of
+    defense — same reasoning as _contains_stray_english and the other
+    code-level backstops in this file. A plain substring match on the same
+    red-flag phrasing the prompt already lists forces the emergency branch
+    even if the model itself answers 'question' or 'recommendation'. False
+    positives here just mean an unnecessary 'call 103' nudge — the safe
+    direction to be wrong in for a medical bot."""
+    lowered = (text or "").lower()
+    return any(phrase in lowered for phrase in _EMERGENCY_PHRASES)
 
 
 def _enforce_safety_checked(parsed: dict, field: str, key: str | None, safety_results: dict) -> str | None:
@@ -637,6 +686,22 @@ async def analyze_symptoms(
     profile: dict | None = None,
 ) -> dict:
     """Call Groq Llama and return a parsed response dict."""
+    user_text = " ".join(
+        m["content"] for m in messages
+        if m.get("role") == "user" and isinstance(m.get("content"), str)
+    )
+    if _contains_emergency_symptoms(user_text):
+        logging.warning(f"Deterministic emergency backstop triggered for: {user_text!r}")
+        return {
+            "type": "emergency",
+            "text": "",
+            "doctor_specialty": None,
+            "bad_recommendation": None,
+            "general_supplement_suggestion": None,
+            "is_lifestyle": False,
+            "needs_followup": False,
+        }
+
     chat_messages = [
         {"role": "system", "content": _build_system(gender, age_range, profile)}
     ] + list(messages)
