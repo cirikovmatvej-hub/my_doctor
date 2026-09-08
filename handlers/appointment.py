@@ -12,9 +12,10 @@ from aiogram.types import CallbackQuery, Message
 from config import APPOINTMENT_ASK_HOURS
 from data.resources import DOCTORS
 from database.db import (
-    create_appointment_followup, get_due_appointment_asks, get_due_appointment_reminders,
-    mark_appointment_ask_sent, mark_appointment_reminder_sent,
-    set_appointment_reason, set_appointment_reminder, set_appointment_status,
+    create_appointment_followup, get_appointment_followup, get_due_appointment_asks,
+    get_due_appointment_reminders, get_or_create_user, mark_appointment_ask_sent,
+    mark_appointment_reminder_sent, set_appointment_reason, set_appointment_reminder,
+    set_appointment_status,
 )
 from keyboards.keyboards import (
     appointment_booked_keyboard, appointment_reason_keyboard,
@@ -77,9 +78,23 @@ async def appointment_loop(bot: Bot) -> None:
 
 # ── Callbacks: booked? ───────────────────────────────────────────────────────
 
+async def _owned_followup_or_none(call: CallbackQuery, followup_id: int) -> dict | None:
+    followup = await get_appointment_followup(followup_id)
+    if not followup:
+        await call.answer("Запись не найдена", show_alert=True)
+        return None
+    user_id = await get_or_create_user(call.from_user.id, call.from_user.username)
+    if followup["user_id"] != user_id:
+        await call.answer("Это не ваша запись", show_alert=True)
+        return None
+    return followup
+
+
 @router.callback_query(F.data.startswith("appt:booked:"))
 async def cb_appt_booked(call: CallbackQuery) -> None:
     followup_id = int(call.data.split(":")[2])
+    if not await _owned_followup_or_none(call, followup_id):
+        return
     await set_appointment_status(followup_id, "booked")
     await call.message.edit_text(
         "Отлично! 🎉 Когда напомнить вам про визит?",
@@ -91,6 +106,8 @@ async def cb_appt_booked(call: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("appt:notbooked:"))
 async def cb_appt_not_booked(call: CallbackQuery) -> None:
     followup_id = int(call.data.split(":")[2])
+    if not await _owned_followup_or_none(call, followup_id):
+        return
     await set_appointment_status(followup_id, "not_booked")
     await call.message.edit_text(
         "Понял. Что помешало записаться?",
@@ -102,7 +119,10 @@ async def cb_appt_not_booked(call: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("appt:reason:"))
 async def cb_appt_reason(call: CallbackQuery) -> None:
     _, _, followup_id_str, reason = call.data.split(":")
-    await set_appointment_reason(int(followup_id_str), reason)
+    followup_id = int(followup_id_str)
+    if not await _owned_followup_or_none(call, followup_id):
+        return
+    await set_appointment_reason(followup_id, reason)
     await call.message.edit_text(
         "Спасибо, что поделились! Если самочувствие не улучшится — "
         "ссылка на запись всегда доступна в истории консультаций 🤍",
@@ -120,6 +140,8 @@ _OFFSET_LABELS = {"tomorrow": "завтра", "3days": "через 3 дня", "w
 async def cb_appt_remind(call: CallbackQuery, state: FSMContext) -> None:
     _, _, followup_id_str, option = call.data.split(":")
     followup_id = int(followup_id_str)
+    if not await _owned_followup_or_none(call, followup_id):
+        return
 
     if option == "custom":
         await state.set_state(AppointmentState.entering_custom_date)

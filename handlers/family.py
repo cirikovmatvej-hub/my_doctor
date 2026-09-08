@@ -97,12 +97,23 @@ async def cmd_family(message: Message, state: FSMContext) -> None:
 
 # ── View member ────────────────────────────────────────────────────────────
 
-@router.callback_query(F.data.startswith("family:view:"))
-async def cb_family_view(call: CallbackQuery) -> None:
-    member_id = int(call.data.split(":")[2])
+async def _owned_member_or_none(call: CallbackQuery, member_id: int) -> dict | None:
     member = await get_family_member(member_id)
     if not member:
         await call.answer("Профиль не найден", show_alert=True)
+        return None
+    user_id = await get_or_create_user(call.from_user.id, call.from_user.username)
+    if member["owner_user_id"] != user_id:
+        await call.answer("Это не ваш профиль", show_alert=True)
+        return None
+    return member
+
+
+@router.callback_query(F.data.startswith("family:view:"))
+async def cb_family_view(call: CallbackQuery) -> None:
+    member_id = int(call.data.split(":")[2])
+    member = await _owned_member_or_none(call, member_id)
+    if not member:
         return
     summary = _member_summary(member)
     await call.message.edit_text(
@@ -131,9 +142,8 @@ async def cb_family_list(call: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("family:delete:") & ~F.data.contains("confirm"))
 async def cb_family_delete(call: CallbackQuery) -> None:
     member_id = int(call.data.split(":")[2])
-    member = await get_family_member(member_id)
+    member = await _owned_member_or_none(call, member_id)
     if not member:
-        await call.answer("Профиль не найден", show_alert=True)
         return
     await call.message.edit_text(
         f"Удалить профиль <b>{member['name']}</b>? Это действие нельзя отменить.",
@@ -146,11 +156,13 @@ async def cb_family_delete(call: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("family:delete_confirm:"))
 async def cb_family_delete_confirm(call: CallbackQuery) -> None:
     member_id = int(call.data.split(":")[2])
-    member = await get_family_member(member_id)
-    name = member["name"] if member else "профиль"
+    member = await _owned_member_or_none(call, member_id)
+    if not member:
+        return
+    name = member["name"]
     await delete_family_member(member_id)
 
-    user_id = await get_or_create_user(call.from_user.id, call.from_user.username)
+    user_id = member["owner_user_id"]
     members = await get_family_members(user_id)
     await call.message.edit_text(
         f"✅ Профиль <b>{name}</b> удалён.",
@@ -218,9 +230,8 @@ async def cb_family_relation(call: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data.startswith("family:edit:"))
 async def cb_family_edit(call: CallbackQuery, state: FSMContext) -> None:
     member_id = int(call.data.split(":")[2])
-    member = await get_family_member(member_id)
+    member = await _owned_member_or_none(call, member_id)
     if not member:
-        await call.answer("Профиль не найден", show_alert=True)
         return
     await state.clear()
     await state.update_data(

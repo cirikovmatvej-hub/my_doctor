@@ -764,6 +764,18 @@ async def create_appointment_followup(user_id: int, doctor_specialty: str, ask_a
         return row[0]
 
 
+async def get_appointment_followup(followup_id: int) -> dict | None:
+    async with _connect() as db:
+        async with db.execute(
+            "SELECT id, user_id, doctor_specialty, status FROM appointment_followups WHERE id=?",
+            (followup_id,),
+        ) as cur:
+            row = await cur.fetchone()
+    if not row:
+        return None
+    return {"id": row[0], "user_id": row[1], "doctor_specialty": row[2], "status": row[3]}
+
+
 async def get_due_appointment_asks(now: datetime) -> list:
     async with _connect() as db:
         async with db.execute(

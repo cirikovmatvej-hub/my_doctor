@@ -14,7 +14,10 @@ from api.deps import get_current_user
 from api.schemas import AppointmentCreate, AppointmentOut, AppointmentStatusUpdate
 from config import APPOINTMENT_ASK_HOURS
 from data.resources import DOCTORS
-from database.db import create_appointment_followup, set_appointment_reason, set_appointment_status
+from database.db import (
+    create_appointment_followup, get_appointment_followup,
+    set_appointment_reason, set_appointment_status,
+)
 
 router = APIRouter(prefix="/appointments", tags=["appointment"])
 
@@ -41,6 +44,9 @@ async def create_appointment(
 async def update_appointment_status(
     followup_id: int, body: AppointmentStatusUpdate, user_id: int = Depends(get_current_user)
 ) -> dict:
+    followup = await get_appointment_followup(followup_id)
+    if not followup or followup["user_id"] != user_id:
+        raise HTTPException(status_code=404, detail="Appointment not found")
     await set_appointment_status(followup_id, body.status)
     if body.reason:
         await set_appointment_reason(followup_id, body.reason)

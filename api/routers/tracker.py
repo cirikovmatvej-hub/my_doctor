@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from api.deps import get_current_user
 from api.schemas import IntakeRequest, TrackerCreateRequest, TrackerOut
 from data.resources import BAD_DETAILS
-from database.db import create_tracking, get_active_trackings, get_days_taken, log_intake
+from database.db import create_tracking, get_active_trackings, get_days_taken, get_tracking, log_intake
 
 router = APIRouter(prefix="/tracker", tags=["tracker"])
 
@@ -58,6 +58,9 @@ async def start_tracking(
 async def log_tracking_intake(
     tracking_id: int, body: IntakeRequest, user_id: int = Depends(get_current_user)
 ) -> dict:
+    tracking = await get_tracking(tracking_id)
+    if not tracking or tracking["user_id"] != user_id:
+        raise HTTPException(status_code=404, detail="Tracking not found")
     today = datetime.now().strftime("%Y-%m-%d")
     await log_intake(tracking_id, today, body.slot, body.status)
     return {"status": "ok"}
