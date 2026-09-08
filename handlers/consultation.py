@@ -1,5 +1,6 @@
 import base64
 import logging
+import time
 from io import BytesIO
 
 try:
@@ -18,7 +19,9 @@ from ai.assistant import (
     analyze_symptoms, analyze_photo, analyze_lab_text,
     build_recommendation_message, AGE_RU, GENDER_RU,
 )
-from config import MAX_QUESTIONS, SHOW_DOCTOR_RECOMMENDATIONS
+from config import (
+    MAX_QUESTIONS, MAX_UPLOAD_SIZE_MB, SHOW_DOCTOR_RECOMMENDATIONS, UPLOAD_COOLDOWN_SECONDS,
+)
 from database.db import (
     add_message,
     create_session,
@@ -59,6 +62,26 @@ EMERGENCY_MSG = (
 
 
 _PDF_MIME = "application/pdf"
+MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
+
+# Per-user cooldown between photo/PDF analyses — each one is a Groq vision/text
+# call against a free-tier daily token quota that's easily exhausted by a
+# multi-round tool loop (see analyze_photo's own docstring), so rapid-fire
+# uploads from one user shouldn't be able to burn through it unthrottled.
+# In-memory and reset on restart is fine — this is a soft throttle, not a
+# security boundary.
+_last_upload_at: dict[int, float] = {}
+
+
+def _upload_cooldown_remaining(telegram_id: int) -> float:
+    last = _last_upload_at.get(telegram_id)
+    if last is None:
+        return 0.0
+    return max(0.0, UPLOAD_COOLDOWN_SECONDS - (time.monotonic() - last))
+
+
+def _mark_upload(telegram_id: int) -> None:
+    _last_upload_at[telegram_id] = time.monotonic()
 
 
 class Consultation(StatesGroup):
@@ -221,7 +244,7 @@ async def handle_symptom(message: Message, state: FSMContext) -> None:
 
     # ── RECOMMENDATION ─────────────────────────────────────────────────────
     if ai_type == "question":
-        ai = await _force_recommendation(messages, gender, age_range)
+        ai = await _force_recommendation(messages, gender, age_range, profile)
 
     final_text = build_recommendation_message(ai)
     await add_message(session_id, "assistant", final_text)
@@ -260,10 +283,24 @@ async def handle_non_text(message: Message) -> None:
 
 async def _process_photo(message: Message, state: FSMContext) -> None:
     """Shared logic: download photo, run vision AI, send result."""
+    telegram_id = message.from_user.id
+    remaining = _upload_cooldown_remaining(telegram_id)
+    if remaining > 0:
+        await message.answer(f"⏳ Подождите ещё {int(remaining) + 1} сек. перед отправкой следующего фото.")
+        return
+
+    photo = message.photo[-1]
+    if photo.file_size and photo.file_size > MAX_UPLOAD_SIZE_BYTES:
+        await message.answer(
+            f"😔 Файл слишком большой (максимум {MAX_UPLOAD_SIZE_MB} МБ). "
+            "Пожалуйста, отправьте файл поменьше."
+        )
+        return
+    _mark_upload(telegram_id)
+
     await message.answer("🔍 Анализирую изображение, подождите немного…")
 
     # Download photo
-    photo = message.photo[-1]
     file = await message.bot.get_file(photo.file_id)
     buf = BytesIO()
     await message.bot.download_file(file.file_path, destination=buf)
@@ -312,6 +349,20 @@ async def handle_photo_direct(message: Message, state: FSMContext) -> None:
 
 async def _process_pdf(message: Message, state: FSMContext) -> None:
     """Download PDF, extract text (or render first page), analyze lab results."""
+    telegram_id = message.from_user.id
+    remaining = _upload_cooldown_remaining(telegram_id)
+    if remaining > 0:
+        await message.answer(f"⏳ Подождите ещё {int(remaining) + 1} сек. перед отправкой следующего документа.")
+        return
+
+    if message.document.file_size and message.document.file_size > MAX_UPLOAD_SIZE_BYTES:
+        await message.answer(
+            f"😔 Файл слишком большой (максимум {MAX_UPLOAD_SIZE_MB} МБ). "
+            "Пожалуйста, отправьте файл поменьше."
+        )
+        return
+    _mark_upload(telegram_id)
+
     await message.answer("📄 Читаю PDF, подождите немного…")
 
     # Download file
