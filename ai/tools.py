@@ -12,8 +12,10 @@ grounding to general_supplement_suggestion — supplements the bot names but
 doesn't sell (data/general_supplements.py) — which previously had zero
 grounding and zero safety-checking.
 """
-from data.bad_safety import check_bad_safety
-from data.general_supplements import GENERAL_SUPPLEMENTS, check_general_supplement_safety, list_general_supplements
+from data.bad_safety import check_bad_safety, get_bad_sources
+from data.general_supplements import (
+    GENERAL_SUPPLEMENTS, check_general_supplement_safety, get_general_sources, list_general_supplements,
+)
 from data.resources import BAD_DETAILS
 
 TOOL_SCHEMAS = [
@@ -93,6 +95,33 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_sources",
+            "description": (
+                "Возвращает реальные источники (названия организаций/изданий и ссылки), на "
+                "которых основаны данные о показаниях и безопасности БАД. Вызови это, если "
+                "пользователь спрашивает, на какие источники/журналы/исследования ты "
+                "опираешься — НЕ отвечай общими фразами вроде 'принципы доказательной "
+                "медицины', а процитируй 2-4 конкретных названия и ссылки из результата этого "
+                "инструмента. Передай topic (ключ конкретного БАД/добавки), если вопрос про "
+                "конкретное вещество — тогда получишь источники именно по нему; не передавай "
+                "topic вовсе, если вопрос общий про методологию."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {
+                        "type": "string",
+                        "enum": list(BAD_DETAILS.keys()) + list(GENERAL_SUPPLEMENTS.keys()),
+                        "description": "Ключ конкретного БАД/добавки. Не передавай для общего вопроса.",
+                    }
+                },
+                "required": [],
+            },
+        },
+    },
 ]
 
 
@@ -132,5 +161,30 @@ def execute_tool(name: str, arguments: dict, profile: dict | None) -> dict:
             "safe": not any(w.kind == "contraindication" for w in warnings),
             "warnings": [{"kind": w.kind, "message": w.message} for w in warnings],
         }
+
+    if name == "list_sources":
+        topic = arguments.get("topic")
+        if topic in BAD_DETAILS:
+            sources = get_bad_sources(topic)
+        elif topic in GENERAL_SUPPLEMENTS:
+            sources = get_general_sources(topic)
+        else:
+            # General methodology question — a representative sample across
+            # both domains, deduplicated, capped so the model gets a few
+            # concrete examples rather than a wall of citations to skim.
+            # Prefer entries that are an actual named/linked source over the
+            # few "source" fields that are really just a mechanism
+            # explanation with no citation (e.g. myasthenia's magnesium
+            # rule) — those read oddly if quoted back as "a journal".
+            combined = get_bad_sources() + get_general_sources()
+            seen: set[str] = set()
+            deduped = []
+            for s in combined:
+                if s not in seen:
+                    seen.add(s)
+                    deduped.append(s)
+            linked = [s for s in deduped if "http" in s]
+            sources = (linked or deduped)[:8]
+        return {"sources": sources}
 
     return {"error": f"unknown tool: {name}"}

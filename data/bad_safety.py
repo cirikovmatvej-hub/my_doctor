@@ -501,6 +501,24 @@ def get_bad_synergies(bad_key: str) -> list[SynergyNote]:
     ]
 
 
+def get_bad_sources(bad_key: str | None = None) -> list[str]:
+    """Deduplicated, real citation strings backing our catalog БАД data —
+    used to answer "what sources/journals do you rely on" honestly with
+    actual names/links instead of a vague self-description. bad_key=None
+    returns a sample across all 3 catalog products."""
+    ingredient_ids = BAD_DETAILS.get(bad_key, {}).get("ingredient_ids", []) if bad_key else None
+    sources: list[str] = []
+    seen: set[str] = set()
+    for rule in INTERACTION_RULES + SYNERGY_RULES:
+        if ingredient_ids is not None and rule["ingredient_id"] not in ingredient_ids:
+            continue
+        source = rule.get("source")
+        if source and source not in seen:
+            seen.add(source)
+            sources.append(source)
+    return sources
+
+
 class SafetyWarning(NamedTuple):
     kind: str  # "pregnancy" | "contraindication" | "interaction" | "caution" | "general_caution"
     bad_key: str

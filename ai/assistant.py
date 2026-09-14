@@ -76,6 +76,15 @@ SYSTEM_PROMPT = f"""Ты медицинский ассистент бота "М�
 конкретно по данным оттуда (поле goal/notes), с честной оговоркой о силе доказательств,
 если она есть в notes. НЕ отвечай общими фразами про здоровый образ жизни вместо
 содержательного ответа про саму добавку — пользователь спросил именно про неё.
+Если вопрос про то, НА КАКИЕ ИСТОЧНИКИ/журналы/исследования ты опираешься (например,
+"откуда данные", "приведи названия журналов", "на какие исследования ты ссылаешься") —
+ОБЯЗАТЕЛЬНО вызови list_sources и назови 2–4 конкретных источника из результата (кратко,
+без ссылки — просто название организации/документа, например "NIH ODS", "клинические
+рекомендации РАЭ"). Если вопрос про источники по конкретному веществу — передай его ключ
+как topic (например, ключ БАД из list_bads_catalog или добавки из list_general_supplements),
+иначе вызови list_sources без topic. НИКОГДА не отвечай общими фразами вроде "я опираюсь
+на принципы доказательной медицины и актуальные клинические рекомендации" без конкретных
+названий — это звучит как отговорка, а не честный ответ.
 
 ═══════════════════════════════════════
 ДЛЯ ТИПА RECOMMENDATION:
@@ -344,6 +353,22 @@ def _contains_emergency_symptoms(text: str) -> bool:
     return any(phrase in lowered for phrase in _EMERGENCY_PHRASES)
 
 
+_SOURCES_QUESTION_TERMS = (
+    "источник", "журнал", "исследовани", "ссылк", "доказательн",
+    "на чём основыва", "на чем основыва", "откуда данные", "откуда ты бер",
+)
+
+
+def mentions_sources_question(text: str) -> bool:
+    """Does the user seem to be asking what our data is based on ("приведи
+    источники", "какие исследования")? Forces list_sources on round 0 for
+    the same reason mentions_a_product_by_name forces the catalog tools —
+    the prompt instruction alone let the model answer with a vague
+    self-description instead of real citations (verified live)."""
+    haystack = (text or "").lower()
+    return any(term in haystack for term in _SOURCES_QUESTION_TERMS)
+
+
 def _enforce_safety_checked(parsed: dict, field: str, key: str | None, safety_results: dict) -> str | None:
     """A recommendation the model never actually ran a safety check for, or
     that the check flagged as kind="contraindication", doesn't get shown —
@@ -403,7 +428,9 @@ async def _run_tool_loop(
         if m.get("role") == "user" and isinstance(m.get("content"), str)
     )
     force_first_tool_call = (
-        mentions_a_product_by_name(user_text) or mentions_a_general_supplement_by_name(user_text)
+        mentions_a_product_by_name(user_text)
+        or mentions_a_general_supplement_by_name(user_text)
+        or mentions_sources_question(user_text)
     )
 
     msg = None

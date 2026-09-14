@@ -752,3 +752,20 @@ def check_general_supplement_safety(key: str, profile: dict | None) -> list[Safe
             ))
 
     return warnings
+
+
+def get_general_sources(key: str | None = None) -> list[str]:
+    """Deduplicated, real citation strings backing the general-supplements
+    knowledge base — mirrors data.bad_safety.get_bad_sources. key=None
+    returns a sample across all 27 entries."""
+    ingredient_ids = GENERAL_SUPPLEMENTS.get(key, {}).get("ingredient_ids", []) if key else None
+    sources: list[str] = []
+    seen: set[str] = set()
+    for rule in GENERAL_INTERACTION_RULES:
+        if ingredient_ids is not None and rule["ingredient_id"] not in ingredient_ids:
+            continue
+        source = rule.get("source")
+        if source and source not in seen:
+            seen.add(source)
+            sources.append(source)
+    return sources
