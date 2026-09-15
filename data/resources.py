@@ -23,6 +23,11 @@ BADS: dict[str, dict] = {
         "description": "для иммунитета, метаболизма и жизненного тонуса",
         "url": "https://www.ozon.ru/product/vitamin-d3-2000-me-d-3-dlya-vzroslyh-bad-dlya-immuniteta-metabolizma-immunomodulyator-dlya-3264202812/?from_sku=3298634291&oos_search=false",
     },
+    "magnesium_b6": {
+        "name": "Магний В6 (цитрат), 120 капсул",
+        "description": "цитрат магния + витамин В6, от стресса и тревожности",
+        "url": "https://www.ozon.ru/product/magniy-v6-magniy-tsitrat-ot-stressa-i-trevog-dlya-muzhchin-i-zhenshchin-120-kapsul-5267756230/?sh=OcQQN0QinQ",
+    },
 }
 
 # ── Детали БАД (инструкции, курс, противопоказания) ────────────────────────
@@ -70,6 +75,25 @@ BAD_DETAILS: dict[str, dict] = {
         "ingredient_ids": ["vitamin_d3"],
         "pregnancy_safe": True,
     },
+    # ingredient_ids=["magnesium"] — same active ingredient as the chelate
+    # product above, so it automatically inherits every existing magnesium
+    # interaction/contraindication rule in data/bad_safety.py (kidney
+    # disease, bradycardia, hypotension, myasthenia, tetracycline,
+    # bisphosphonates, levothyroxine) without duplicating any of that data.
+    "magnesium_b6": {
+        "emoji": "🌙",
+        "full_name": "Магний В6 (цитрат), 120 капсул",
+        "goal": "Снижение стресса и тревожности, поддержка нервной системы (магния цитрат + витамин В6)",
+        "course_days": 30,
+        "dosage": "2 капсулы в день (144 мг магния цитрата на капсулу)",
+        "daily_doses": 1,
+        "default_times": ["21:00"],
+        "best_time": "во время еды — время приёма не принципиально, но ближе к вечеру помогает расслаблению перед сном",
+        "with_food": True,
+        "notes": "Принимайте 2 капсулы в день во время еды. Курс — 1 месяц, при необходимости можно повторить. Магний в форме цитрата (144 мг) + витамин В6 (пиридоксина гидрохлорид) — сочетание, которое часто используют для снижения стресса и тревожности.",
+        "ingredient_ids": ["magnesium"],
+        "pregnancy_safe": False,
+    },
 }
 
 # ── Цели подбора БАД ────────────────────────────────────────────────────────
@@ -81,7 +105,7 @@ BAD_DETAILS: dict[str, dict] = {
 BAD_GOALS: dict[str, dict] = {
     "sleep_stress": {
         "label":       "😴 Сон и стресс",
-        "bads":        ["magnesium"],
+        "bads":        ["magnesium", "magnesium_b6"],
         "general_supplements": ["valerian", "melatonin"],
         "description": "Улучшение качества сна, снижение тревожности и раздражительности",
     },
