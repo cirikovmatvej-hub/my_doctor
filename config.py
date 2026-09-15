@@ -23,3 +23,11 @@ SHOW_DOCTOR_RECOMMENDATIONS: bool = os.getenv("SHOW_DOCTOR_RECOMMENDATIONS", "fa
 API_JWT_SECRET: str = os.getenv("API_JWT_SECRET", "")
 APPLE_BUNDLE_ID: str = os.getenv("APPLE_BUNDLE_ID", "")
 DEV_LOGIN_SECRET: str = os.getenv("DEV_LOGIN_SECRET", "")
+
+# ── Admin ──────────────────────────────────────────────────────────────────
+# Telegram user ids allowed to run /stats. Comma-separated in the env var —
+# defaults to the owner's own id (from local testing) so it works out of the
+# box, but override ADMIN_TELEGRAM_IDS in .env for the real deployment.
+ADMIN_TELEGRAM_IDS: set[int] = {
+    int(x) for x in os.getenv("ADMIN_TELEGRAM_IDS", "608451729").split(",") if x.strip()
+}

@@ -1,9 +1,11 @@
+import logging
+
 from aiogram import Router
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
-from database.db import get_or_create_user, get_user_profile
+from database.db import get_or_create_user, get_user_profile, log_acquisition_event, user_exists
 from handlers.profile import ask_gender, ask_chronic_diseases
 from keyboards.keyboards import main_menu
 
@@ -21,8 +23,21 @@ WELCOME = (
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext) -> None:
+async def cmd_start(message: Message, state: FSMContext, command: CommandObject) -> None:
     await state.clear()
+
+    # Deep-link attribution (QR codes on product cards etc.) — /start
+    # <payload> from t.me/<bot>?start=<payload>. Checked BEFORE
+    # get_or_create_user so we can still tell whether this telegram_id was
+    # brand new, not just whether the source tag itself is new.
+    source = command.args
+    if source:
+        is_new = not await user_exists(message.from_user.id)
+        try:
+            await log_acquisition_event(message.from_user.id, source, is_new)
+        except Exception as e:
+            logging.warning(f"Could not log acquisition event ({source!r}): {e}")
+
     await get_or_create_user(message.from_user.id, message.from_user.username)
 
     profile = await get_user_profile(message.from_user.id)

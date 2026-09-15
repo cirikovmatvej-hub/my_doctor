@@ -148,6 +148,19 @@ async def init_db() -> None:
                 FOREIGN KEY (user_id) REFERENCES users(id)
             )
         """)
+        # /start deep-link attribution (QR codes on product cards etc.) — one
+        # row per /start that carried a tracked source, so both "how many
+        # scans" (row count) and "how many of those were brand-new users"
+        # (is_new_user) can be answered, not just current user totals.
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS acquisition_events (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id  INTEGER NOT NULL,
+                source       TEXT NOT NULL,
+                is_new_user  INTEGER NOT NULL,
+                created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
 
         # Migrations for existing DBs
         _migrations = [
@@ -237,6 +250,16 @@ async def init_db() -> None:
 
 
 # ── Users ──────────────────────────────────────────────────────────────────
+
+async def user_exists(telegram_id: int) -> bool:
+    """Checked BEFORE get_or_create_user so a handler can tell a brand-new
+    user from a returning one — get_or_create_user itself always returns
+    just an id either way, and changing that return shape would ripple into
+    every one of its many call sites for the sake of this one caller."""
+    async with _connect() as db:
+        async with db.execute("SELECT 1 FROM users WHERE telegram_id = ?", (telegram_id,)) as cur:
+            return await cur.fetchone() is not None
+
 
 async def get_or_create_user(telegram_id: int, username: str | None = None) -> int:
     async with _connect() as db:
@@ -922,5 +945,29 @@ async def get_diary_entries(user_id: int, limit: int = 7) -> list:
             "SELECT entry_date, sleep_quality, energy_level, stress_level, bads_taken, notes "
             "FROM diary_entries WHERE user_id=? ORDER BY entry_date DESC LIMIT ?",
             (user_id, limit)
+        ) as cur:
+            return await cur.fetchall()
+
+
+# ── Acquisition tracking (QR codes / deep links) ────────────────────────────
+
+async def log_acquisition_event(telegram_id: int, source: str, is_new_user: bool) -> None:
+    async with _connect() as db:
+        await db.execute(
+            "INSERT INTO acquisition_events (telegram_id, source, is_new_user) VALUES (?, ?, ?)",
+            (telegram_id, source, int(is_new_user)),
+        )
+        await db.commit()
+
+
+async def get_acquisition_stats() -> list[tuple[str, int, int]]:
+    """(source, total scans, unique new users) per tracked source, scans
+    (row count) first since that's the raw "how many times was this QR
+    opened" number; unique new users is the narrower "how many people we
+    actually gained from it" number."""
+    async with _connect() as db:
+        async with db.execute(
+            "SELECT source, COUNT(*), SUM(is_new_user) "
+            "FROM acquisition_events GROUP BY source ORDER BY COUNT(*) DESC"
         ) as cur:
             return await cur.fetchall()

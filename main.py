@@ -7,7 +7,7 @@ from aiogram.types import BotCommand
 from config import BOT_TOKEN
 from database.db import init_db
 from database.fsm_storage import SQLiteStorage
-from handlers import consultation, followup, history, profile, start
+from handlers import admin, consultation, followup, history, profile, start
 from handlers import appointment, bad_advisor, family, tracker, diary
 
 
@@ -38,6 +38,7 @@ async def main() -> None:
     ])
 
     # Router order matters: more specific routers first
+    dp.include_router(admin.router)
     dp.include_router(start.router)
     dp.include_router(profile.router)
     dp.include_router(family.router)
