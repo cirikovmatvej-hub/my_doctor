@@ -11,7 +11,7 @@ BADS: dict[str, dict] = {
     "magnesium": {
         "name": "Магний хелат 1000 мг",
         "description": "для спокойствия, крепкого сна и снятия стресса",
-        "url": "https://www.ozon.ru/product/magniy-helat-1000-mg-bad-dlya-spokoystviya-sna-protiv-stressa-vitaminy-dlya-zhenshchin-i-3298606074/?from_sku=3298634291&oos_search=false",
+        "url": "https://www.ozon.ru/product/magniy-helat-1000-mg-bad-dlya-spokoystviya-sna-protiv-stressa-vitaminy-dlya-zhenshchin-i-5276543018/?sh=OcQQN0QinQ",
     },
     "collagen": {
         "name": "Капсулированный коллаген комплекс + вит. С",
