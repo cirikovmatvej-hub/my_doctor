@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from api.deps import get_current_user
 from api.schemas import ProfileIn, ProfileOut, ProfilePatch, UtcOffsetIn
 from database.db import (
-    get_user_profile_by_id, get_utc_offset_by_id,
+    delete_user_account, get_user_profile_by_id, get_utc_offset_by_id,
     set_health_field_by_id, set_utc_offset_by_id,
     update_user_health_profile_by_id,
 )
@@ -70,3 +70,12 @@ async def get_my_utc_offset(user_id: int = Depends(get_current_user)) -> dict:
 async def put_my_utc_offset(body: UtcOffsetIn, user_id: int = Depends(get_current_user)) -> dict:
     await set_utc_offset_by_id(user_id, body.offset)
     return {"offset": body.offset}
+
+
+@router.delete("/me")
+async def delete_me(user_id: int = Depends(get_current_user)) -> dict:
+    """Permanently delete the account and everything stored for it — profile,
+    consultations, courses and intake history, diary, family profiles.
+    Required by App Store review for any app that lets people create an account."""
+    await delete_user_account(user_id)
+    return {"status": "ok"}

@@ -359,6 +359,39 @@ async def update_user_health_profile(
 # else in this module (sessions, tracking, diary, family, appointments) is
 # already keyed by the internal users.id, so no _by_id variant is needed there.
 
+async def user_id_exists(user_id: int) -> bool:
+    async with _connect() as db:
+        async with db.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)) as cur:
+            return await cur.fetchone() is not None
+
+
+async def delete_user_account(user_id: int) -> None:
+    """Erase everything stored for this user, then the user row itself.
+
+    Foreign keys aren't enforced in this SQLite setup, so nothing cascades —
+    every table that hangs off the user is cleared explicitly, children before
+    parents. It all runs in one transaction: either the account is fully gone
+    or (on any error) nothing was touched. acquisition_events is keyed by
+    telegram_id and holds nothing about app-only accounts."""
+    async with _connect() as db:
+        await db.execute(
+            "DELETE FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE user_id=?)",
+            (user_id,),
+        )
+        await db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+        await db.execute(
+            "DELETE FROM intake_logs WHERE tracking_id IN "
+            "(SELECT id FROM product_tracking WHERE user_id=?)",
+            (user_id,),
+        )
+        await db.execute("DELETE FROM product_tracking WHERE user_id=?", (user_id,))
+        await db.execute("DELETE FROM appointment_followups WHERE user_id=?", (user_id,))
+        await db.execute("DELETE FROM family_members WHERE owner_user_id=?", (user_id,))
+        await db.execute("DELETE FROM diary_entries WHERE user_id=?", (user_id,))
+        await db.execute("DELETE FROM users WHERE id=?", (user_id,))
+        await db.commit()
+
+
 async def get_or_create_user_by_apple_sub(apple_sub: str, email: str | None = None) -> int:
     async with _connect() as db:
         async with db.execute("SELECT id FROM users WHERE apple_sub = ?", (apple_sub,)) as cur:
