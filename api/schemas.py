@@ -85,6 +85,10 @@ class BadOut(BaseModel):
     name: str
     url: str
     description: str
+    # What the app needs to offer "start a course" right from the recommendation.
+    course_days: int
+    daily_doses: int
+    default_times: list[str]
 
 
 class MessageOut(BaseModel):

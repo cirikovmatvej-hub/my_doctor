@@ -74,6 +74,7 @@ def test_recommendation_carries_disclaimer_warnings_and_general_supplement(tmp_p
     assert body["general_supplement"] == "омега-3"
     assert body["safety_warnings"] == ["магний: предупреждение А", "омега-3: предупреждение Б"]
     assert body["bad"]["key"] == "magnesium"
+    assert body["bad"]["default_times"] and body["bad"]["daily_doses"] >= 1   # enough to start a course from it
 
 
 def test_warnings_only_ride_along_with_the_supplement_they_are_about(tmp_path, monkeypatch):

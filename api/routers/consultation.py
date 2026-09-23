@@ -18,7 +18,7 @@ from api.schemas import (
     MessageIn, MessageOut, TranscriptTurn,
 )
 from config import MAX_QUESTIONS, SHOW_DOCTOR_RECOMMENDATIONS
-from data.resources import BADS, DOCTORS
+from data.resources import BAD_DETAILS, BADS, DOCTORS
 from database.db import (
     add_message, create_session, get_family_member, get_session, get_session_messages,
     get_user_profile_by_id, set_session_complaint, update_session_summary,
@@ -51,7 +51,11 @@ def _bad_out(key: str | None) -> BadOut | None:
     if not key or key not in BADS:
         return None
     b = BADS[key]
-    return BadOut(key=key, name=b["name"], url=b["url"], description=b["description"])
+    d = BAD_DETAILS[key]
+    return BadOut(
+        key=key, name=b["name"], url=b["url"], description=b["description"],
+        course_days=d["course_days"], daily_doses=d["daily_doses"], default_times=d["default_times"],
+    )
 
 
 async def _own_session(session_id: int, user_id: int) -> dict:
