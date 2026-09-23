@@ -2,7 +2,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from api.routers import appointment, auth, bad_advisor, consultation, diary, family, history, profile, tracker
+from api.routers import (
+    appointment, auth, bad_advisor, consultation, diary, family, history, profile, sources, tracker,
+)
 from database.db import init_db
 
 
@@ -23,6 +25,7 @@ app.include_router(diary.router)
 app.include_router(family.router)
 app.include_router(appointment.router)
 app.include_router(history.router)
+app.include_router(sources.router)
 
 
 @app.get("/health")

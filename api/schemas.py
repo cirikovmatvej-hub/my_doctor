@@ -339,3 +339,20 @@ class FamilyMemberOut(BaseModel):
     physical_activity: str | None = None
     height_weight: str | None = None
     onboarding_done: bool
+
+
+# ── Sources ──────────────────────────────────────────────────────────────────
+
+class SourceOut(BaseModel):
+    title: str
+    url: str | None = None
+
+
+class SourceGroupOut(BaseModel):
+    names: list[str]          # the products/supplements these citations back
+    sources: list[SourceOut]
+
+
+class SourcesOut(BaseModel):
+    catalog: list[SourceGroupOut]   # products we sell
+    other: list[SourceGroupOut]     # supplements we only give information about
