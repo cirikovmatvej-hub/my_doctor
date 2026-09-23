@@ -545,7 +545,8 @@ async def get_pending_followups() -> list:
             "SELECT s.id, u.telegram_id, s.complaint, s.created_at "
             "FROM sessions s JOIN users u ON u.id=s.user_id "
             "WHERE s.status='completed' AND s.follow_up_sent=0 "
-            "AND s.follow_up_at IS NOT NULL AND s.follow_up_at<=?", (now,)
+            "AND s.follow_up_at IS NOT NULL AND s.follow_up_at<=? "
+            "AND u.telegram_id IS NOT NULL", (now,)
         ) as cur:
             return await cur.fetchall()
 
@@ -610,12 +611,16 @@ async def get_active_trackings(user_id: int) -> list:
 async def get_tracking(tracking_id: int) -> dict | None:
     async with _connect() as db:
         async with db.execute(
-            "SELECT id, user_id, product_key FROM product_tracking WHERE id=?", (tracking_id,)
+            "SELECT id, user_id, product_key, status, course_days FROM product_tracking WHERE id=?",
+            (tracking_id,),
         ) as cur:
             row = await cur.fetchone()
     if not row:
         return None
-    return {"id": row[0], "user_id": row[1], "product_key": row[2]}
+    return {
+        "id": row[0], "user_id": row[1], "product_key": row[2],
+        "status": row[3], "course_days": row[4],
+    }
 
 
 async def stop_tracking(tracking_id: int) -> None:
@@ -639,19 +644,28 @@ async def get_days_taken(tracking_id: int) -> int:
         return row[0] if row else 0
 
 
-async def complete_finished_trackings() -> list[tuple[int, int, str, int]]:
+async def complete_finished_trackings(user_id: int | None = None) -> list[tuple[int, int, str, int]]:
     """Flip status to 'completed' for every active tracking whose days-taken
     has reached course_days, so the reminder loop stops nagging once a course
     is actually done. Returns (tracking_id, telegram_id, product_key,
-    course_days) for each newly-completed one, for a "course finished!" ping."""
+    course_days) for each newly-completed one, for a "course finished!" ping.
+
+    user_id scopes it to one account — the API calls it that way so a course
+    finishes the moment its last intake is logged, without waiting for the
+    bot's loop. telegram_id is None for app-only (Apple sign-in) users."""
+    query = (
+        "SELECT pt.id, u.telegram_id, pt.product_key, pt.course_days, "
+        "(SELECT COUNT(DISTINCT log_date) FROM intake_logs "
+        " WHERE tracking_id=pt.id AND status='taken') AS days_taken "
+        "FROM product_tracking pt JOIN users u ON u.id=pt.user_id "
+        "WHERE pt.status='active'"
+    )
+    params: tuple = ()
+    if user_id is not None:
+        query += " AND pt.user_id=?"
+        params = (user_id,)
     async with _connect() as db:
-        async with db.execute(
-            "SELECT pt.id, u.telegram_id, pt.product_key, pt.course_days, "
-            "(SELECT COUNT(DISTINCT log_date) FROM intake_logs "
-            " WHERE tracking_id=pt.id AND status='taken') AS days_taken "
-            "FROM product_tracking pt JOIN users u ON u.id=pt.user_id "
-            "WHERE pt.status='active'"
-        ) as cur:
+        async with db.execute(query, params) as cur:
             rows = await cur.fetchall()
 
         finished = [row for row in rows if row[4] >= row[3]]
@@ -708,7 +722,7 @@ async def get_due_reminders(now_utc: datetime) -> list:
             "SELECT pt.id, u.telegram_id, u.utc_offset, pt.product_key, pt.course_days, "
             "pt.reminder_time_1, pt.reminder_time_2, pt.last_reminder_1_date, pt.last_reminder_2_date "
             "FROM product_tracking pt JOIN users u ON u.id=pt.user_id "
-            "WHERE pt.status='active'"
+            "WHERE pt.status='active' AND u.telegram_id IS NOT NULL"
         ) as cur:
             rows = await cur.fetchall()
 
@@ -755,7 +769,8 @@ async def get_near_end_courses() -> list:
         async with db.execute(
             "SELECT pt.id, u.telegram_id, pt.product_key, pt.course_days "
             "FROM product_tracking pt JOIN users u ON u.id=pt.user_id "
-            "WHERE pt.status='active' AND pt.end_reminder_sent=0"
+            "WHERE pt.status='active' AND pt.end_reminder_sent=0 "
+            "AND u.telegram_id IS NOT NULL"
         ) as cur:
             rows = await cur.fetchall()
 
@@ -804,7 +819,7 @@ async def get_due_appointment_asks(now: datetime) -> list:
         async with db.execute(
             "SELECT af.id, u.telegram_id, af.doctor_specialty "
             "FROM appointment_followups af JOIN users u ON u.id=af.user_id "
-            "WHERE af.ask_sent=0 AND af.ask_at<=?",
+            "WHERE af.ask_sent=0 AND af.ask_at<=? AND u.telegram_id IS NOT NULL",
             (now.isoformat(),),
         ) as cur:
             return await cur.fetchall()
@@ -844,7 +859,8 @@ async def get_due_appointment_reminders(now: datetime) -> list:
         async with db.execute(
             "SELECT af.id, u.telegram_id, af.doctor_specialty "
             "FROM appointment_followups af JOIN users u ON u.id=af.user_id "
-            "WHERE af.reminder_sent=0 AND af.reminder_at IS NOT NULL AND af.reminder_at<=?",
+            "WHERE af.reminder_sent=0 AND af.reminder_at IS NOT NULL AND af.reminder_at<=? "
+            "AND u.telegram_id IS NOT NULL",
             (now.isoformat(),),
         ) as cur:
             return await cur.fetchall()

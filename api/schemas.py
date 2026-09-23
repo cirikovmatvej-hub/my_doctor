@@ -94,6 +94,12 @@ class MessageOut(BaseModel):
     bad: BadOut | None = None
     is_lifestyle: bool = False
     session_status: str  # "active" | "completed"
+    # Mirrors what handlers/consultation.py's build_recommendation_message()
+    # appends in the bot: a non-catalog supplement suggestion, the grounded
+    # safety warnings for it/the catalog BAD, and the mandatory disclaimer.
+    general_supplement: str | None = None
+    safety_warnings: list[str] = []
+    disclaimer: str | None = None
 
 
 class TranscriptTurn(BaseModel):
@@ -109,14 +115,27 @@ class ConsultationTranscriptOut(BaseModel):
 
 # ── BAD advisor ──────────────────────────────────────────────────────────────
 
+class ClarifyOptionOut(BaseModel):
+    key: str
+    label: str
+
+
+class ClarifyOut(BaseModel):
+    question: str
+    options: list[ClarifyOptionOut]
+
+
 class BadGoalOut(BaseModel):
     key: str
     label: str
     description: str
+    suggested: bool = False          # matches the user's profile — listed first, shown with a ⭐
+    clarify: ClarifyOut | None = None
 
 
 class GoalCheckRequest(BaseModel):
     goal_key: str
+    clarify_option: str | None = None   # answer to the goal's ClarifyOut question, if it has one
 
 
 class BadCardOut(BaseModel):
@@ -132,19 +151,36 @@ class BadCardOut(BaseModel):
     with_food: bool
     notes: str
     url: str
+    synergies: list[str] = []
+
+
+class GeneralCardOut(BaseModel):
+    """A supplement from the knowledge base that we don't sell: no dosage,
+    course or buy link — just honest info and the option to track intake."""
+    key: str
+    label: str
+    goal: str
+    notes: str | None = None
 
 
 class GoalCheckResponse(BaseModel):
     goal_label: str
-    warnings: list[str]
+    warnings: list[str]              # non-blocking cautions — the card is still shown
+    blocked_notes: list[str] = []    # contraindications — those products are NOT in bads/general_supplements
+    extra_note: str | None = None
     lifestyle_tips: str
     bads: list[BadCardOut]
+    general_supplements: list[GeneralCardOut] = []
 
 
 # ── Tracker ──────────────────────────────────────────────────────────────────
 
 class TrackerCreateRequest(BaseModel):
+    # A catalog key (course length comes from the catalog), or — for a
+    # supplement we don't sell — the user's own name for it, in which case
+    # course_days is required.
     product_key: str
+    course_days: int | None = None
     reminder_time_1: str | None = None
     reminder_time_2: str | None = None
 
@@ -161,9 +197,28 @@ class TrackerOut(BaseModel):
     reminder_time_2: str | None = None
 
 
+class TrackerHistoryOut(BaseModel):
+    id: int
+    product_key: str
+    emoji: str
+    full_name: str
+    start_date: str
+    course_days: int
+    days_taken: int
+    status: str  # "completed" | "stopped"
+
+
 class IntakeRequest(BaseModel):
     status: str  # "taken" | "skip"
     slot: str    # "1" | "2"
+    date: str | None = None  # the user's local YYYY-MM-DD; server date if omitted
+
+
+class IntakeOut(BaseModel):
+    status: str
+    days_taken: int
+    course_days: int
+    course_completed: bool  # this intake was the one that finished the course
 
 
 # ── Diary ────────────────────────────────────────────────────────────────────
@@ -183,6 +238,32 @@ class DiaryEntryIn(BaseModel):
     stress_level: int
     bads_taken: bool
     notes: str | None = None
+    date: str | None = None  # the user's local YYYY-MM-DD; server date if omitted
+
+
+class DiaryCourseOut(BaseModel):
+    product_key: str
+    full_name: str
+    start_date: str
+    status: str
+    ended_at: str | None = None
+
+
+class DiaryChangeOut(BaseModel):
+    metric: str  # "sleep" | "energy" | "stress"
+    before: float
+    after: float
+
+
+class DiaryCorrelationOut(BaseModel):
+    product_key: str
+    full_name: str
+    changes: list[DiaryChangeOut]
+
+
+class DiaryInsightsOut(BaseModel):
+    courses: list[DiaryCourseOut]
+    correlations: list[DiaryCorrelationOut]
 
 
 # ── Family ───────────────────────────────────────────────────────────────────

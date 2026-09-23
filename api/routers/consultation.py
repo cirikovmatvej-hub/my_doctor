@@ -7,16 +7,17 @@ transcript from the `messages` table. The assistant's raw JSON reply is
 persisted as-is so the next call reconstructs exactly what the model saw.
 """
 import json
+import re
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from ai.assistant import analyze_symptoms
+from ai.assistant import RECOMMENDATION_DISCLAIMER, analyze_symptoms
 from api.deps import get_current_user
 from api.schemas import (
     BadOut, ConsultationCreate, ConsultationOut, ConsultationTranscriptOut, DoctorOut,
     MessageIn, MessageOut, TranscriptTurn,
 )
-from config import MAX_QUESTIONS
+from config import MAX_QUESTIONS, SHOW_DOCTOR_RECOMMENDATIONS
 from data.resources import BADS, DOCTORS
 from database.db import (
     add_message, create_session, get_family_member, get_session, get_session_messages,
@@ -31,7 +32,15 @@ EMERGENCY_NOTICE = (
 )
 
 
+# The bot builds this as HTML for Telegram; the app renders plain text.
+DISCLAIMER = re.sub(r"</?i>", "", RECOMMENDATION_DISCLAIMER)
+
+
 def _doctor_out(specialty: str | None) -> DoctorOut | None:
+    # Same switch the bot's build_recommendation_message() honors — while
+    # doctor recommendations are turned off there, the app must not show them.
+    if not SHOW_DOCTOR_RECOMMENDATIONS:
+        return None
     if not specialty or specialty not in DOCTORS:
         return None
     d = DOCTORS[specialty]
@@ -126,16 +135,38 @@ async def send_message(
     if ai.get("type") in ("recommendation", "emergency"):
         if ai.get("type") == "emergency":
             text += EMERGENCY_NOTICE
-        await update_session_summary(session_id, text[:480])
+        # Only schedule the "how are you feeling?" check-in when the model
+        # asked for one — the bot does the same; an emergency never gets one.
+        await update_session_summary(
+            session_id, text[:480],
+            schedule_followup=ai.get("type") == "recommendation" and bool(ai.get("needs_followup")),
+        )
         session_status = "completed"
+
+    bad = _bad_out(ai.get("bad_recommendation"))
+    general_supplement = ai.get("general_supplement_suggestion") or None
+    is_recommendation = ai.get("type", "recommendation") == "recommendation"
+
+    # Mirrors build_recommendation_message(): grounded safety warnings ride
+    # along with whichever supplement they're about, and the disclaimer is
+    # attached in code, never left to the model.
+    safety_warnings: list[str] = []
+    if is_recommendation:
+        if bad:
+            safety_warnings += ai.get("_grounded_safety_warnings") or []
+        if general_supplement:
+            safety_warnings += ai.get("_grounded_general_safety_warnings") or []
 
     return MessageOut(
         type=ai.get("type", "recommendation"),
         text=text,
         doctor=_doctor_out(ai.get("doctor_specialty")),
-        bad=_bad_out(ai.get("bad_recommendation")),
+        bad=bad,
         is_lifestyle=bool(ai.get("is_lifestyle")),
         session_status=session_status,
+        general_supplement=general_supplement if is_recommendation else None,
+        safety_warnings=safety_warnings,
+        disclaimer=DISCLAIMER if is_recommendation else None,
     )
 
 

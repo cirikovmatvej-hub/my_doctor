@@ -546,6 +546,8 @@ async def reminder_loop(bot: Bot) -> None:
             # reminders forever until this runs first each iteration.
             finished = await complete_finished_trackings()
             for tracking_id, telegram_id, product_key, course_days in finished:
+                if telegram_id is None:
+                    continue  # app-only user: the app shows its own completion notice
                 await _send_course_completed(bot, telegram_id, product_key, course_days)
             if finished:
                 logging.info(f"Completed {len(finished)} finished courses")

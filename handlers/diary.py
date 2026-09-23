@@ -27,6 +27,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
+from data.diary_insights import course_correlations
 from data.resources import BAD_DETAILS
 from database.db import (
     get_all_trackings,
@@ -107,33 +108,19 @@ def _build_diary_chart(entries: list) -> bytes:
     return buf.getvalue()
 
 
-_MIN_SIDE_ENTRIES = 3  # need at least this many diary entries on each side of a course start to say anything
-
-
 def _course_correlation_text(entries: list, trackings: list) -> str:
     """For each course with enough diary data both before and after its
     start date, compare average sleep/energy/stress. Phrased as "changed
     since", not "improved because of" — this is a correlation from the
-    user's own logs, not a clinical claim of what caused it."""
+    user's own logs, not a clinical claim of what caused it. The numbers
+    come from data.diary_insights, shared with the API."""
     lines = []
-    for _tid, product_key, start_date_str, _status, _ended_at in trackings:
-        start_date = start_date_str[:10]
-        before = [e for e in entries if e[0] < start_date]
-        after = [e for e in entries if e[0] >= start_date]
-        if len(before) < _MIN_SIDE_ENTRIES or len(after) < _MIN_SIDE_ENTRIES:
-            continue
-
-        parts = []
-        for label, idx in (("сон", 1), ("энергия", 2), ("стресс", 3)):
-            avg_before = sum(e[idx] for e in before) / len(before)
-            avg_after = sum(e[idx] for e in after) / len(after)
-            if abs(avg_after - avg_before) < 0.3:
-                continue
-            arrow = "📈" if avg_after > avg_before else "📉"
-            parts.append(f"{label} {avg_before:.1f}→{avg_after:.1f} {arrow}")
-
-        if parts:
-            lines.append(f"<b>{_tracking_display_name(product_key)}</b>: " + ", ".join(parts))
+    for course in course_correlations(entries, trackings):
+        parts = [
+            f"{c.label} {c.before:.1f}→{c.after:.1f} {'📈' if c.after > c.before else '📉'}"
+            for c in course.changes
+        ]
+        lines.append(f"<b>{_tracking_display_name(course.product_key)}</b>: " + ", ".join(parts))
 
     if not lines:
         return ""
