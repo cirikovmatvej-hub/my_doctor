@@ -754,6 +754,9 @@ async def analyze_symptoms(
             "general_supplement_suggestion": None,
             "is_lifestyle": False,
             "needs_followup": False,
+            # Lets a caller tell "the model call failed" from a real answer: the
+            # bot shows this text as-is, the API answers 503 so the user can retry.
+            "_technical_error": True,
         }
 
 

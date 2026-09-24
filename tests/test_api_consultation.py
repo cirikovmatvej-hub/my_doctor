@@ -125,19 +125,65 @@ def test_followup_scheduled_only_when_model_asks(tmp_path, monkeypatch):
     assert _follow_up_at(without_followup["session_id"]) is None
 
 
-def test_emergency_never_schedules_followup(tmp_path, monkeypatch):
-    client = _setup(tmp_path, monkeypatch, {"type": "emergency", "text": "", "needs_followup": True})
-    try:
-        body = _send(client, "боль в груди")
-    finally:
-        app.dependency_overrides.clear()
+def test_emergency_shows_the_fixed_message_and_never_schedules_followup(tmp_path, monkeypatch):
+    # Whatever the model wrote (here: nothing, as with the keyword backstop, or
+    # chatter) the user always gets the same clear instructions.
+    for model_text in ("", "Возможно, это просто мышечная боль."):
+        client = _setup(tmp_path, monkeypatch, {"type": "emergency", "text": model_text, "needs_followup": True})
+        try:
+            body = _send(client, "боль в груди")
+            transcript = client.get(f"/consultations/{body['session_id']}").json()
+        finally:
+            app.dependency_overrides.clear()
 
-    assert body["type"] == "emergency"
-    assert body["disclaimer"] is None
-    assert _follow_up_at(body["session_id"]) is None
+        assert body["type"] == "emergency"
+        assert body["text"] == consultation.EMERGENCY_TEXT
+        assert not body["text"].startswith("\n") and "112" in body["text"] and "103" in body["text"]
+        assert body["disclaimer"] is None
+        assert _follow_up_at(body["session_id"]) is None
+        # history shows the same instructions, not an empty turn
+        assert transcript["turns"][-1]["text"] == consultation.EMERGENCY_TEXT
+        assert _summary(body["session_id"]) == consultation.EMERGENCY_SUMMARY
+
+
+def _summary(session_id: int):
+    async def q():
+        async with aiosqlite.connect(db.DATABASE_PATH) as conn:
+            async with conn.execute("SELECT summary FROM sessions WHERE id=?", (session_id,)) as cur:
+                return (await cur.fetchone())[0]
+    return asyncio.run(q())
 
 
 def _stub(reply: dict):
     async def fake_analyze(*args, **kwargs):
         return dict(reply)
     return fake_analyze
+
+
+def test_a_failed_model_call_is_retryable_not_a_finished_consultation(tmp_path, monkeypatch):
+    """When the model call fails the AI layer returns a canned "technical error,
+    see a therapist" recommendation. The app must get an error instead — the
+    session stays open, nothing is saved, and sending the same text again works
+    (without a duplicate of it in the transcript)."""
+    failed = {
+        "type": "recommendation", "text": "Произошла техническая ошибка. Рекомендую обратиться к терапевту.",
+        "doctor_specialty": "therapist", "bad_recommendation": None, "general_supplement_suggestion": None,
+        "is_lifestyle": False, "needs_followup": False, "_technical_error": True,
+    }
+    client = _setup(tmp_path, monkeypatch, failed)
+    try:
+        session_id = client.post("/consultations", json={}).json()["session_id"]
+        first = client.post(f"/consultations/{session_id}/messages", json={"text": "болит голова"})
+        assert first.status_code == 503
+
+        transcript = client.get(f"/consultations/{session_id}").json()
+        assert transcript["status"] == "active" and transcript["turns"] == []
+
+        monkeypatch.setattr(consultation, "analyze_symptoms", _stub({"type": "question", "text": "Как давно?"}))
+        retry = client.post(f"/consultations/{session_id}/messages", json={"text": "болит голова"})
+        assert retry.status_code == 200 and retry.json()["type"] == "question"
+
+        turns = client.get(f"/consultations/{session_id}").json()["turns"]
+        assert [(t["role"], t["text"]) for t in turns] == [("user", "болит голова"), ("assistant", "Как давно?")]
+    finally:
+        app.dependency_overrides.clear()

@@ -26,10 +26,17 @@ from database.db import (
 
 router = APIRouter(prefix="/consultations", tags=["consultation"])
 
-EMERGENCY_NOTICE = (
-    "\n\n🚨 Это может быть неотложным состоянием. "
-    "Немедленно позвоните 112 (единая служба спасения) или 103 (скорая помощь)."
+# Same wording as the bot's EMERGENCY_MSG, as plain text. Like the bot, the app
+# always shows this for an emergency and never whatever the model wrote — a
+# life-safety message shouldn't vary between runs.
+EMERGENCY_TEXT = (
+    "Описанные симптомы могут требовать немедленной медицинской помощи.\n\n"
+    "Позвоните прямо сейчас:\n"
+    "• 112 — единый номер экстренных служб\n"
+    "• 103 — скорая помощь\n\n"
+    "Не ждите — обратитесь за помощью прямо сейчас!"
 )
+EMERGENCY_SUMMARY = "Экстренная ситуация — пользователь направлен в скорую."
 
 
 # The bot builds this as HTML for Telegram; the app renders plain text.
@@ -104,14 +111,16 @@ async def send_message(
     if not session["complaint"]:
         await set_session_complaint(session_id, body.text[:200])
 
-    await add_message(session_id, "user", body.text)
-
     profile = await _load_profile(session, user_id)
     gender = profile.get("gender") if profile else None
     age_range = profile.get("age_range") if profile else None
 
+    # The new user message is only saved once the model has actually answered —
+    # if the call fails the client retries the same text, which must not leave
+    # a duplicate behind.
     history = await get_session_messages(session_id)
     transcript = [{"role": role, "content": content} for role, content in history]
+    transcript.append({"role": "user", "content": body.text})
     prior_questions = sum(1 for role, _ in history if role == "assistant")
 
     ai = await analyze_symptoms(transcript, gender=gender, age_range=age_range, profile=profile)
@@ -130,19 +139,31 @@ async def send_message(
         if ai.get("type") == "question":
             ai["type"] = "recommendation"
 
+    # A failed model call comes back as a canned "technical error, see a
+    # therapist" recommendation. The bot shows it; here it must not be stored,
+    # end the consultation, or read as advice — tell the client to try again.
+    if ai.get("_technical_error"):
+        raise HTTPException(
+            status_code=503, detail="Не удалось получить ответ. Попробуйте отправить сообщение ещё раз."
+        )
+
+    await add_message(session_id, "user", body.text)
+
+    if ai.get("type") == "emergency":
+        ai["text"] = EMERGENCY_TEXT
+
     # Persist the assistant's raw JSON turn so the next call rebuilds the exact
-    # conversation the model saw.
+    # conversation the model saw (and the transcript shows what the user saw).
     await add_message(session_id, "assistant", json.dumps(ai, ensure_ascii=False))
 
     text = ai.get("text", "")
     session_status = "active"
     if ai.get("type") in ("recommendation", "emergency"):
-        if ai.get("type") == "emergency":
-            text += EMERGENCY_NOTICE
         # Only schedule the "how are you feeling?" check-in when the model
         # asked for one — the bot does the same; an emergency never gets one.
         await update_session_summary(
-            session_id, text[:480],
+            session_id,
+            EMERGENCY_SUMMARY if ai.get("type") == "emergency" else text[:480],
             schedule_followup=ai.get("type") == "recommendation" and bool(ai.get("needs_followup")),
         )
         session_status = "completed"
