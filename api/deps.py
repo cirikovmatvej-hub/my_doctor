@@ -19,8 +19,8 @@ async def get_current_user(
     )
     try:
         user_id = verify_session_token(creds.credentials)
-    except jwt.InvalidTokenError:
-        raise unauthorized
+    except jwt.InvalidTokenError as exc:
+        raise unauthorized from exc
     # A session token outlives the account it was issued for (180 days), and
     # the endpoints would happily write rows for a user id that no longer
     # exists — so a deleted account's token must stop working.

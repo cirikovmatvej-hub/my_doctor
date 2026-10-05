@@ -89,8 +89,12 @@ def test_last_intake_completes_the_course(tmp_path):
     (uid,) = _make_users(tmp_path)
     client = _client_as(uid)
     try:
-        tid = client.post("/tracker", json={"product_key": "Омега-3", "course_days": 2}).json()["id"]
         today = date.today()
+        # The course starts yesterday (the client's day), so yesterday's intake counts.
+        tid = client.post("/tracker", json={
+            "product_key": "Омега-3", "course_days": 2,
+            "date": (today - timedelta(days=1)).isoformat(),
+        }).json()["id"]
 
         first = client.post(f"/tracker/{tid}/intake", json={
             "status": "taken", "slot": "1", "date": (today - timedelta(days=1)).isoformat(),
@@ -135,3 +139,85 @@ def test_intake_date_is_the_clients_day_and_sanity_checked(tmp_path):
         assert client.post(url, json={"status": "taken", "slot": "1", "date": yesterday}).status_code == 200
     finally:
         app.dependency_overrides.clear()
+
+
+def test_course_starts_on_the_clients_day(tmp_path):
+    (uid,) = _make_users(tmp_path)
+    client = _client_as(uid)
+    try:
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        started = client.post("/tracker", json={"product_key": "magnesium", "date": yesterday}).json()
+        assert started["start_date"] == yesterday
+        assert client.get("/tracker").json()[0]["start_date"] == yesterday
+        # Without a client date the server's day is used; a wild one is rejected.
+        assert client.post("/tracker", json={"product_key": "collagen"}).json()["start_date"] == date.today().isoformat()
+        far = (date.today() - timedelta(days=30)).isoformat()
+        assert client.post("/tracker", json={"product_key": "magnesium", "date": far}).status_code == 400
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_an_intake_before_the_course_started_does_not_count(tmp_path):
+    (uid,) = _make_users(tmp_path)
+    client = _client_as(uid)
+    try:
+        tid = client.post("/tracker", json={"product_key": "Омега-3", "course_days": 5}).json()["id"]
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        out = client.post(f"/tracker/{tid}/intake", json={"status": "taken", "slot": "1", "date": yesterday}).json()
+    finally:
+        app.dependency_overrides.clear()
+    assert out["days_taken"] == 0
+
+
+def test_intake_input_is_validated(tmp_path):
+    (uid,) = _make_users(tmp_path)
+    client = _client_as(uid)
+    try:
+        tid = client.post("/tracker", json={"product_key": "magnesium"}).json()["id"]
+        url = f"/tracker/{tid}/intake"
+        assert client.post(url, json={"status": "maybe", "slot": "1"}).status_code == 422
+        assert client.post(url, json={"status": "taken", "slot": "3"}).status_code == 422
+        assert client.post(url, json={"status": "taken", "slot": "2"}).status_code == 200
+        for bad_time in ("9:00", "25:00", "09:60", "morning"):
+            resp = client.post("/tracker", json={"product_key": "collagen", "reminder_time_1": bad_time})
+            assert resp.status_code == 422, bad_time
+        assert client.post("/tracker", json={"product_key": "collagen", "reminder_time_1": "21:30"}).status_code == 200
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_toggling_an_intake_overwrites_it_instead_of_stacking(tmp_path):
+    (uid,) = _make_users(tmp_path)
+    client = _client_as(uid)
+    try:
+        tid = client.post("/tracker", json={"product_key": "Омега-3", "course_days": 5}).json()["id"]
+        url = f"/tracker/{tid}/intake"
+        body = {"status": "taken", "slot": "1"}
+        assert client.post(url, json=body).json()["days_taken"] == 1
+        assert client.post(url, json=body).json()["days_taken"] == 1  # same slot, same day
+        assert client.post(url, json={**body, "status": "skip"}).json()["days_taken"] == 0
+        assert client.post(url, json=body).json()["days_taken"] == 1
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_stopped_course_records_the_clients_day_and_rejects_further_intakes(tmp_path):
+    (uid,) = _make_users(tmp_path)
+    client = _client_as(uid)
+    try:
+        tid = client.post("/tracker", json={"product_key": "Омега-3", "course_days": 5}).json()["id"]
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        assert client.delete(f"/tracker/{tid}", params={"date": yesterday}).json() == {"status": "ok"}
+        assert client.delete(f"/tracker/{tid}", params={"date": "garbage"}).status_code == 422
+        resp = client.post(f"/tracker/{tid}/intake", json={"status": "taken", "slot": "1"})
+        assert resp.status_code == 409
+        assert client.delete(f"/tracker/{tid}").status_code == 409
+    finally:
+        app.dependency_overrides.clear()
+
+    async def ended_at():
+        async with db._connect() as conn:
+            async with conn.execute("SELECT ended_at FROM product_tracking WHERE id=?", (tid,)) as cur:
+                return (await cur.fetchone())[0]
+
+    assert asyncio.run(ended_at()) == yesterday

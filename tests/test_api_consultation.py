@@ -187,3 +187,102 @@ def test_a_failed_model_call_is_retryable_not_a_finished_consultation(tmp_path, 
         assert [(t["role"], t["text"]) for t in turns] == [("user", "болит голова"), ("assistant", "Как давно?")]
     finally:
         app.dependency_overrides.clear()
+
+
+def test_concurrent_messages_to_one_session_run_the_model_one_at_a_time(tmp_path, monkeypatch):
+    """A double-tap/retry used to run two model calls over the same history and
+    store two replies. Turns for one session are now serialized: the second
+    waits, then sees the first's turn in its history."""
+    import httpx
+
+    client = _setup(tmp_path, monkeypatch, {"type": "question", "text": "Как давно?"})
+    session_id = client.post("/consultations", json={}).json()["session_id"]
+
+    in_flight = 0
+    peak = 0
+    histories = []
+
+    async def slow_analyze(transcript, *args, **kwargs):
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        histories.append(len(transcript))
+        await asyncio.sleep(0.05)
+        in_flight -= 1
+        return {"type": "question", "text": "Как давно?"}
+
+    monkeypatch.setattr(consultation, "analyze_symptoms", slow_analyze)
+
+    async def run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+            url = f"/consultations/{session_id}/messages"
+            return await asyncio.gather(
+                ac.post(url, json={"text": "первое"}), ac.post(url, json={"text": "второе"}),
+            )
+
+    try:
+        responses = asyncio.run(run())
+        turns = client.get(f"/consultations/{session_id}").json()["turns"]
+    finally:
+        app.dependency_overrides.clear()
+
+    assert [r.status_code for r in responses] == [200, 200]
+    assert peak == 1
+    assert sorted(histories) == [1, 3]   # the later turn saw the earlier one
+    assert [t["role"] for t in turns] == ["user", "assistant", "user", "assistant"]
+    assert consultation._session_locks == {} and not consultation._session_lock_users
+
+
+def test_account_deleted_mid_turn_is_a_404_and_leaves_no_orphan_messages(tmp_path, monkeypatch):
+    client = _setup(tmp_path, monkeypatch, {"type": "question", "text": "Как давно?"})
+    session_id = client.post("/consultations", json={}).json()["session_id"]
+
+    async def delete_during_call(*args, **kwargs):
+        async with aiosqlite.connect(db.DATABASE_PATH) as conn:
+            async with conn.execute("SELECT user_id FROM sessions WHERE id=?", (session_id,)) as cur:
+                (uid,) = await cur.fetchone()
+        await db.delete_user_account(uid)
+        return {"type": "question", "text": "Как давно?"}
+
+    monkeypatch.setattr(consultation, "analyze_symptoms", delete_during_call)
+    try:
+        resp = client.post(f"/consultations/{session_id}/messages", json={"text": "болит голова"})
+    finally:
+        app.dependency_overrides.clear()
+
+    async def message_count():
+        async with aiosqlite.connect(db.DATABASE_PATH) as conn:
+            async with conn.execute("SELECT COUNT(*) FROM messages") as cur:
+                return (await cur.fetchone())[0]
+
+    assert resp.status_code == 404
+    assert asyncio.run(message_count()) == 0
+
+
+def test_a_stored_reply_that_is_not_a_json_object_does_not_break_the_transcript(tmp_path, monkeypatch):
+    client = _setup(tmp_path, monkeypatch, {"type": "question", "text": "?"})
+    session_id = client.post("/consultations", json={}).json()["session_id"]
+
+    async def seed():
+        for content in ("null", "[1, 2]", "просто текст"):
+            await db.add_message(session_id, "assistant", content)
+
+    asyncio.run(seed())
+    try:
+        resp = client.get(f"/consultations/{session_id}")
+    finally:
+        app.dependency_overrides.clear()
+    assert resp.status_code == 200
+    assert [t["text"] for t in resp.json()["turns"]] == ["null", "[1, 2]", "просто текст"]
+
+
+def test_empty_or_oversized_message_is_rejected(tmp_path, monkeypatch):
+    client = _setup(tmp_path, monkeypatch, {"type": "question", "text": "?"})
+    session_id = client.post("/consultations", json={}).json()["session_id"]
+    try:
+        url = f"/consultations/{session_id}/messages"
+        assert client.post(url, json={"text": ""}).status_code == 422
+        assert client.post(url, json={"text": "а" * 4001}).status_code == 422
+    finally:
+        app.dependency_overrides.clear()

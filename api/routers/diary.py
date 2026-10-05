@@ -15,7 +15,6 @@ router = APIRouter(prefix="/diary", tags=["diary"])
 
 MAX_ENTRIES = 90
 INSIGHTS_DAYS = 30  # same window the bot's chart plots
-RATING_RANGE = range(1, 6)
 
 
 def _full_name(product_key: str) -> str:
@@ -68,17 +67,15 @@ async def diary_insights(user_id: int = Depends(get_current_user)) -> DiaryInsig
 async def put_today_entry(
     body: DiaryEntryIn, user_id: int = Depends(get_current_user)
 ) -> DiaryEntryOut:
-    for value in (body.sleep_quality, body.energy_level, body.stress_level):
-        if value not in RATING_RANGE:
-            raise HTTPException(status_code=422, detail="Ratings must be between 1 and 5")
-
     entry_date = resolve_client_date(body.date)
-    await save_diary_entry(
+    saved = await save_diary_entry(
         user_id=user_id, entry_date=entry_date,
         sleep_quality=body.sleep_quality, energy_level=body.energy_level,
         stress_level=body.stress_level, bads_taken=int(body.bads_taken),
         notes=body.notes,
     )
+    if not saved:
+        raise HTTPException(status_code=404, detail="User not found")
     return DiaryEntryOut(
         entry_date=entry_date, sleep_quality=body.sleep_quality, energy_level=body.energy_level,
         stress_level=body.stress_level, bads_taken=body.bads_taken, notes=body.notes,

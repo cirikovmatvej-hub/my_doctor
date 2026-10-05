@@ -193,6 +193,42 @@ async def init_db() -> None:
 
         await db.commit()
 
+        # save_diary_entry/log_intake use INSERT OR REPLACE, which only
+        # replaces when a UNIQUE constraint is hit — and neither table had
+        # one, so every re-save just appended a duplicate row (a second PUT
+        # for the same day double-counted it in the insights; an intake could
+        # never be corrected from "taken" to "skip"). Collapse existing
+        # duplicates to the latest row (last write wins), then add the
+        # unique indexes that make the upsert real. Backs the DB up first,
+        # but only when there is actually something to delete.
+        async with db.execute(
+            "SELECT (SELECT COUNT(*) FROM (SELECT 1 FROM diary_entries "
+            "GROUP BY user_id, entry_date HAVING COUNT(*) > 1)), "
+            "(SELECT COUNT(*) FROM (SELECT 1 FROM intake_logs "
+            "GROUP BY tracking_id, log_date, time_of_day HAVING COUNT(*) > 1))"
+        ) as cur:
+            dup_diary, dup_intake = await cur.fetchone()
+        if dup_diary or dup_intake:
+            backup_path = f"{DATABASE_PATH}.backup_dedupe_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            await db.execute("VACUUM INTO ?", (backup_path,))
+            await db.execute(
+                "DELETE FROM diary_entries WHERE id NOT IN "
+                "(SELECT MAX(id) FROM diary_entries GROUP BY user_id, entry_date)"
+            )
+            await db.execute(
+                "DELETE FROM intake_logs WHERE id NOT IN "
+                "(SELECT MAX(id) FROM intake_logs GROUP BY tracking_id, log_date, time_of_day)"
+            )
+        await db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_diary_user_date "
+            "ON diary_entries (user_id, entry_date)"
+        )
+        await db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_intake_tracking_date_slot "
+            "ON intake_logs (tracking_id, log_date, time_of_day)"
+        )
+        await db.commit()
+
         # Channel-agnostic users table: add apple_sub/apple_email and drop
         # telegram_id's NOT NULL constraint so Apple-only (non-Telegram) users
         # can exist. SQLite can't relax a NOT NULL via ALTER TABLE ADD COLUMN,
@@ -509,13 +545,33 @@ async def update_session_summary(session_id: int, summary: str, schedule_followu
         await db.commit()
 
 
-async def add_message(session_id: int, role: str, content: str) -> None:
+_INSERT_MESSAGE_IF_SESSION_EXISTS = (
+    "INSERT INTO messages (session_id, role, content) "
+    "SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM sessions WHERE id = ?)"
+)
+
+
+async def add_message(session_id: int, role: str, content: str) -> bool:
+    """False if the session no longer exists (e.g. the account was deleted
+    while a slow model call was in flight) — nothing is written then, rather
+    than leaving an orphaned row of someone's health text nobody can delete."""
+    return await add_messages(session_id, [(role, content)])
+
+
+async def add_messages(session_id: int, items: list[tuple[str, str]]) -> bool:
+    """Insert several messages for one session in a single transaction —
+    all or nothing, so a failure between a user turn and its reply can't
+    leave an orphaned half-turn that a retry then duplicates."""
     async with _connect() as db:
-        await db.execute(
-            "INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)",
-            (session_id, role, content),
-        )
+        for role, content in items:
+            cur = await db.execute(
+                _INSERT_MESSAGE_IF_SESSION_EXISTS, (session_id, role, content, session_id)
+            )
+            if cur.rowcount != 1:
+                await db.rollback()
+                return False
         await db.commit()
+        return True
 
 
 async def get_user_sessions(user_id: int, limit: int = 5) -> list:
@@ -611,8 +667,11 @@ async def create_tracking(
     user_id: int, product_key: str, course_days: int,
     reminder_time_1: str | None = None,
     reminder_time_2: str | None = None,
+    start_date: str | None = None,
 ) -> int:
-    today = datetime.now().strftime("%Y-%m-%d")
+    """start_date is the user's own calendar date (the API passes the
+    device's); defaults to the server's, which is what the bot uses."""
+    today = start_date or datetime.now().strftime("%Y-%m-%d")
     async with _connect() as db:
         await db.execute(
             "UPDATE product_tracking SET status='paused' "
@@ -656,22 +715,26 @@ async def get_tracking(tracking_id: int) -> dict | None:
     }
 
 
-async def stop_tracking(tracking_id: int) -> None:
+async def stop_tracking(tracking_id: int, ended_at: str | None = None) -> None:
     """Soft-delete: flips status so it drops out of get_active_trackings and
     the reminder loop, without losing intake_logs history."""
     async with _connect() as db:
         await db.execute(
             "UPDATE product_tracking SET status='stopped', ended_at=? WHERE id=?",
-            (datetime.now().strftime("%Y-%m-%d"), tracking_id),
+            (ended_at or datetime.now().strftime("%Y-%m-%d"), tracking_id),
         )
         await db.commit()
 
 
 async def get_days_taken(tracking_id: int) -> int:
     async with _connect() as db:
+        # An intake dated before the course's start_date (a client clock a day
+        # off, a mis-tapped back-dated entry) isn't part of the course.
         async with db.execute(
-            "SELECT COUNT(DISTINCT log_date) FROM intake_logs "
-            "WHERE tracking_id=? AND status='taken'", (tracking_id,)
+            "SELECT COUNT(DISTINCT il.log_date) FROM intake_logs il "
+            "JOIN product_tracking pt ON pt.id = il.tracking_id "
+            "WHERE il.tracking_id=? AND il.status='taken' AND il.log_date >= pt.start_date",
+            (tracking_id,),
         ) as cur:
             row = await cur.fetchone()
         return row[0] if row else 0
@@ -689,7 +752,7 @@ async def complete_finished_trackings(user_id: int | None = None) -> list[tuple[
     query = (
         "SELECT pt.id, u.telegram_id, pt.product_key, pt.course_days, "
         "(SELECT COUNT(DISTINCT log_date) FROM intake_logs "
-        " WHERE tracking_id=pt.id AND status='taken') AS days_taken "
+        " WHERE tracking_id=pt.id AND status='taken' AND log_date >= pt.start_date) AS days_taken "
         "FROM product_tracking pt JOIN users u ON u.id=pt.user_id "
         "WHERE pt.status='active'"
     )
@@ -738,14 +801,17 @@ async def get_all_trackings(user_id: int) -> list:
             return await cur.fetchall()
 
 
-async def log_intake(tracking_id: int, log_date: str, time_of_day: str, status: str) -> None:
+async def log_intake(tracking_id: int, log_date: str, time_of_day: str, status: str) -> bool:
+    """Upsert (the unique index on tracking/date/slot makes a second tap
+    overwrite the first). False if the tracking no longer exists."""
     async with _connect() as db:
-        await db.execute(
+        cur = await db.execute(
             "INSERT OR REPLACE INTO intake_logs (tracking_id, log_date, time_of_day, status) "
-            "VALUES (?, ?, ?, ?)",
-            (tracking_id, log_date, time_of_day, status),
+            "SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM product_tracking WHERE id = ?)",
+            (tracking_id, log_date, time_of_day, status, tracking_id),
         )
         await db.commit()
+        return cur.rowcount == 1
 
 
 async def get_due_reminders(now_utc: datetime) -> list:
@@ -977,15 +1043,18 @@ async def save_diary_entry(
     user_id: int, entry_date: str,
     sleep_quality: int, energy_level: int, stress_level: int,
     bads_taken: int, notes: str | None,
-) -> None:
+) -> bool:
+    """Upsert (unique index on user/date: re-saving a day replaces it).
+    False if the user no longer exists."""
     async with _connect() as db:
-        await db.execute(
+        cur = await db.execute(
             "INSERT OR REPLACE INTO diary_entries "
             "(user_id, entry_date, sleep_quality, energy_level, stress_level, bads_taken, notes) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (user_id, entry_date, sleep_quality, energy_level, stress_level, bads_taken, notes),
+            "SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM users WHERE id = ?)",
+            (user_id, entry_date, sleep_quality, energy_level, stress_level, bads_taken, notes, user_id),
         )
         await db.commit()
+        return cur.rowcount == 1
 
 
 async def get_diary_entries(user_id: int, limit: int = 7) -> list:

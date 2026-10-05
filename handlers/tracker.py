@@ -451,7 +451,10 @@ async def cb_intake(call: CallbackQuery) -> None:
     tracking_id = int(parts[2])
     slot        = parts[3]
 
-    today = datetime.utcnow().strftime("%Y-%m-%d")
+    # Same clock create_tracking() uses for start_date: days_taken ignores
+    # intakes dated before the course start, so a UTC date here could land a
+    # day behind a course started just after local midnight.
+    today = datetime.now().strftime("%Y-%m-%d")
     await log_intake(tracking_id, today, slot, status_str)
 
     if status_str == "taken":

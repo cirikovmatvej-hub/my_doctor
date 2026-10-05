@@ -6,14 +6,13 @@ Reminders themselves are scheduled client-side as local iOS notifications
 (see the iOS app's NotificationScheduler) rather than server-pushed, so
 there's no reminder loop here — unlike the bot, which polls Telegram.
 """
-from datetime import datetime
-
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.dates import resolve_client_date
 from api.deps import get_current_user
 from api.schemas import (
-    IntakeOut, IntakeRequest, TrackerCreateRequest, TrackerHistoryOut, TrackerOut,
+    DATE_PATTERN, IntakeOut, IntakeRequest, OkOut, TrackerCreateRequest,
+    TrackerHistoryOut, TrackerOut,
 )
 from data.resources import BAD_DETAILS
 from database.db import (
@@ -93,16 +92,20 @@ async def start_tracking(
         body.product_key = name
         course_days = body.course_days
 
+    # The course starts on the user's own calendar day, not the server's —
+    # otherwise intakes logged with the device's date can pre-date start_date.
+    start_date = resolve_client_date(body.date)
     tracking_id = await create_tracking(
         user_id, body.product_key, course_days,
         body.reminder_time_1, body.reminder_time_2,
+        start_date=start_date,
     )
 
     emoji, full_name = _display(body.product_key)
     return TrackerOut(
         id=tracking_id, product_key=body.product_key,
         emoji=emoji, full_name=full_name,
-        start_date=datetime.now().strftime("%Y-%m-%d"), course_days=course_days,
+        start_date=start_date, course_days=course_days,
         days_taken=0, reminder_time_1=body.reminder_time_1, reminder_time_2=body.reminder_time_2,
     )
 
@@ -119,7 +122,11 @@ async def log_tracking_intake(
     tracking_id: int, body: IntakeRequest, user_id: int = Depends(get_current_user)
 ) -> IntakeOut:
     tracking = await _own_tracking(tracking_id, user_id)
-    await log_intake(tracking_id, resolve_client_date(body.date), body.slot, body.status)
+    if tracking["status"] != "active":
+        raise HTTPException(status_code=409, detail="Course is not active")
+    if not await log_intake(tracking_id, resolve_client_date(body.date), body.slot, body.status):
+        # The course was deleted (account removal) between the ownership check and the write.
+        raise HTTPException(status_code=404, detail="Tracking not found")
 
     days_taken = await get_days_taken(tracking_id)
     finished = await complete_finished_trackings(user_id)
@@ -129,11 +136,15 @@ async def log_tracking_intake(
     )
 
 
-@router.delete("/{tracking_id}")
-async def stop_course(tracking_id: int, user_id: int = Depends(get_current_user)) -> dict:
+@router.delete("/{tracking_id}", response_model=OkOut)
+async def stop_course(
+    tracking_id: int,
+    date: str | None = Query(default=None, pattern=DATE_PATTERN),
+    user_id: int = Depends(get_current_user),
+) -> OkOut:
     tracking = await _own_tracking(tracking_id, user_id)
     if tracking["status"] != "active":
         # Already completed/stopped — keep its recorded end state as is.
         raise HTTPException(status_code=409, detail="Course is not active")
-    await stop_tracking(tracking_id)
-    return {"status": "ok"}
+    await stop_tracking(tracking_id, ended_at=resolve_client_date(date))
+    return OkOut()

@@ -1,4 +1,11 @@
-from pydantic import BaseModel
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+# HH:MM, 24h — the format the iOS app sends and the bot's reminder loop parses.
+TIME_PATTERN = r"^([01]\d|2[0-3]):[0-5]\d$"
+# YYYY-MM-DD shape only; resolve_client_date() does the real parsing/skew check.
+DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
 
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
@@ -71,7 +78,7 @@ class ConsultationOut(BaseModel):
 
 
 class MessageIn(BaseModel):
-    text: str
+    text: str = Field(min_length=1, max_length=4000)
 
 
 class DoctorOut(BaseModel):
@@ -183,10 +190,11 @@ class TrackerCreateRequest(BaseModel):
     # A catalog key (course length comes from the catalog), or — for a
     # supplement we don't sell — the user's own name for it, in which case
     # course_days is required.
-    product_key: str
-    course_days: int | None = None
-    reminder_time_1: str | None = None
-    reminder_time_2: str | None = None
+    product_key: str = Field(min_length=1, max_length=100)
+    course_days: int | None = Field(default=None, ge=1, le=365)
+    reminder_time_1: str | None = Field(default=None, pattern=TIME_PATTERN)
+    reminder_time_2: str | None = Field(default=None, pattern=TIME_PATTERN)
+    date: str | None = Field(default=None, pattern=DATE_PATTERN)  # the user's local start day; server date if omitted
 
 
 class TrackerOut(BaseModel):
@@ -213,9 +221,13 @@ class TrackerHistoryOut(BaseModel):
 
 
 class IntakeRequest(BaseModel):
-    status: str  # "taken" | "skip"
-    slot: str    # "1" | "2"
-    date: str | None = None  # the user's local YYYY-MM-DD; server date if omitted
+    status: Literal["taken", "skip"]
+    slot: Literal["1", "2"]
+    date: str | None = Field(default=None, pattern=DATE_PATTERN)  # the user's local day; server date if omitted
+
+
+class OkOut(BaseModel):
+    status: Literal["ok"] = "ok"
 
 
 class IntakeOut(BaseModel):
@@ -237,12 +249,12 @@ class DiaryEntryOut(BaseModel):
 
 
 class DiaryEntryIn(BaseModel):
-    sleep_quality: int
-    energy_level: int
-    stress_level: int
+    sleep_quality: int = Field(ge=1, le=5)
+    energy_level: int = Field(ge=1, le=5)
+    stress_level: int = Field(ge=1, le=5)
     bads_taken: bool
-    notes: str | None = None
-    date: str | None = None  # the user's local YYYY-MM-DD; server date if omitted
+    notes: str | None = Field(default=None, max_length=2000)
+    date: str | None = Field(default=None, pattern=DATE_PATTERN)  # the user's local day; server date if omitted
 
 
 class DiaryCourseOut(BaseModel):

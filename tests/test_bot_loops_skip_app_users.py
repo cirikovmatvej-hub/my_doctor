@@ -47,7 +47,9 @@ def test_tracker_reminders_skip_app_only_users(tmp_path):
     async def run():
         app_user, tg_user = await _app_and_telegram_user()
         for uid in (app_user, tg_user):
-            await db.create_tracking(uid, "magnesium", 30, "09:00", None)
+            # 3-day course: inside the "ending soon" window straight away, so
+            # the near-end query has rows for both users to (not) return.
+            await db.create_tracking(uid, "magnesium", 3, "09:00", None)
         now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
         # make "now" land exactly on the reminder time in each user's (default UTC+3) local day
         local = now_utc + timedelta(hours=3)
@@ -58,7 +60,7 @@ def test_tracker_reminders_skip_app_only_users(tmp_path):
 
     due, near_end = asyncio.run(run())
     assert [row[1] for row in due] == [555]
-    assert all(row[1] == 555 for row in near_end)
+    assert [row[1] for row in near_end] == [555]
 
 
 def test_appointment_loops_skip_app_only_users(tmp_path):
@@ -76,3 +78,34 @@ def test_appointment_loops_skip_app_only_users(tmp_path):
     asks, reminders = asyncio.run(run())
     assert [row[1] for row in asks] == [555]
     assert [row[1] for row in reminders] == [555]
+
+
+def test_reminder_loop_does_not_message_app_only_users(tmp_path, monkeypatch):
+    """A finished app-only course comes back from complete_finished_trackings
+    with telegram_id None; the loop must skip it, not call send_message(None)."""
+    import handlers.tracker as tracker_handlers
+
+    _make_db(tmp_path)
+    monkeypatch.setattr(tracker_handlers, "REMINDER_CHECK_INTERVAL", 0)
+
+    class FakeBot:
+        def __init__(self):
+            self.chat_ids = []
+
+        async def send_message(self, chat_id, *args, **kwargs):
+            self.chat_ids.append(chat_id)
+
+    async def run():
+        app_user, tg_user = await _app_and_telegram_user()
+        today = datetime.now().strftime("%Y-%m-%d")
+        for uid in (app_user, tg_user):
+            tid = await db.create_tracking(uid, "magnesium", 1, None, None)
+            await db.log_intake(tid, today, "1", "taken")
+        bot = FakeBot()
+        try:
+            await asyncio.wait_for(tracker_handlers.reminder_loop(bot), timeout=1.0)
+        except asyncio.TimeoutError:
+            pass  # the loop never returns on its own
+        return bot.chat_ids
+
+    assert asyncio.run(run()) == [555]

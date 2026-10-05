@@ -6,8 +6,10 @@ aiogram FSM memory as an optimization), every turn here rebuilds the full
 transcript from the `messages` table. The assistant's raw JSON reply is
 persisted as-is so the next call reconstructs exactly what the model saw.
 """
+import asyncio
 import json
 import re
+from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -20,7 +22,7 @@ from api.schemas import (
 from config import MAX_QUESTIONS, SHOW_DOCTOR_RECOMMENDATIONS
 from data.resources import BAD_DETAILS, BADS, DOCTORS
 from database.db import (
-    add_message, create_session, get_family_member, get_session, get_session_messages,
+    add_messages, create_session, get_family_member, get_session, get_session_messages,
     get_user_profile_by_id, set_session_complaint, update_session_summary,
 )
 
@@ -65,6 +67,13 @@ def _bad_out(key: str | None) -> BadOut | None:
     )
 
 
+# One in-flight model turn per session. A double-tap or client retry would
+# otherwise run two LLM calls over the same history and persist two replies.
+# Per-process: the API runs as a single uvicorn process (the bot is separate).
+_session_locks: dict[int, asyncio.Lock] = {}
+_session_lock_users: defaultdict[int, int] = defaultdict(int)  # holders + waiters, so a lock is dropped only when idle
+
+
 async def _own_session(session_id: int, user_id: int) -> dict:
     session = await get_session(session_id)
     if not session or session["user_id"] != user_id:
@@ -104,7 +113,24 @@ async def create_consultation(
 async def send_message(
     session_id: int, body: MessageIn, user_id: int = Depends(get_current_user)
 ) -> MessageOut:
-    session = await _own_session(session_id, user_id)
+    await _own_session(session_id, user_id)  # 404 early, without creating a lock for foreign ids
+    lock = _session_locks.setdefault(session_id, asyncio.Lock())
+    _session_lock_users[session_id] += 1
+    try:
+        async with lock:
+            # Re-read under the lock: a concurrent turn may have just completed it.
+            session = await _own_session(session_id, user_id)
+            return await _answer_message(session_id, session, body, user_id)
+    finally:
+        _session_lock_users[session_id] -= 1
+        if _session_lock_users[session_id] == 0:
+            del _session_lock_users[session_id]
+            del _session_locks[session_id]
+
+
+async def _answer_message(
+    session_id: int, session: dict, body: MessageIn, user_id: int
+) -> MessageOut:
     if session["status"] != "active":
         raise HTTPException(status_code=409, detail="Consultation already completed")
 
@@ -147,14 +173,18 @@ async def send_message(
             status_code=503, detail="Не удалось получить ответ. Попробуйте отправить сообщение ещё раз."
         )
 
-    await add_message(session_id, "user", body.text)
-
     if ai.get("type") == "emergency":
         ai["text"] = EMERGENCY_TEXT
 
-    # Persist the assistant's raw JSON turn so the next call rebuilds the exact
-    # conversation the model saw (and the transcript shows what the user saw).
-    await add_message(session_id, "assistant", json.dumps(ai, ensure_ascii=False))
+    # Persist the user turn and the assistant's raw JSON reply together, so the
+    # next call rebuilds the exact conversation the model saw (and the
+    # transcript shows what the user saw) — never a half-saved turn. False
+    # means the session vanished mid-call (account deleted).
+    if not await add_messages(session_id, [
+        ("user", body.text),
+        ("assistant", json.dumps(ai, ensure_ascii=False)),
+    ]):
+        raise HTTPException(status_code=404, detail="Consultation not found")
 
     text = ai.get("text", "")
     session_status = "active"
@@ -206,9 +236,10 @@ async def get_consultation(
     for role, content in history:
         if role == "assistant":
             try:
-                text = json.loads(content).get("text", content)
+                parsed = json.loads(content)
             except json.JSONDecodeError:
-                text = content
+                parsed = None
+            text = parsed.get("text", content) if isinstance(parsed, dict) else content
         else:
             text = content
         turns.append(TranscriptTurn(role=role, text=text))

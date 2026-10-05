@@ -20,8 +20,8 @@ def resolve_client_date(client_date: str | None) -> str:
         return today.isoformat()
     try:
         parsed = date.fromisoformat(client_date)
-    except ValueError:
-        raise HTTPException(status_code=422, detail="date must be YYYY-MM-DD")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="date must be YYYY-MM-DD") from exc
     if abs((parsed - today).days) > MAX_SKEW_DAYS:
         raise HTTPException(status_code=400, detail="date is too far from the server date")
     return parsed.isoformat()

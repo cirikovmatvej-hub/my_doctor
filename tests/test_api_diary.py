@@ -104,3 +104,23 @@ def test_correlations_need_enough_data_on_both_sides_and_a_real_change():
 
     small_shift = [row(f"2026-01-0{i}", 3) for i in range(1, 6)] + [row(f"2026-01-1{i}", 3.2) for i in range(0, 4)]
     assert course_correlations(small_shift, trackings) == []
+
+
+def test_putting_the_same_day_twice_updates_instead_of_duplicating(tmp_path):
+    _, client = _client(tmp_path)
+    try:
+        assert client.put("/diary/today", json=_entry(sleep_quality=2)).status_code == 200
+        assert client.put("/diary/today", json=_entry(sleep_quality=5, notes="лучше")).status_code == 200
+        rows = client.get("/diary").json()
+    finally:
+        app.dependency_overrides.clear()
+    assert [(r["sleep_quality"], r["notes"]) for r in rows] == [(5, "лучше")]
+
+
+def test_malformed_date_and_oversized_notes_are_rejected(tmp_path):
+    _, client = _client(tmp_path)
+    try:
+        assert client.put("/diary/today", json=_entry(date="01.10.2026")).status_code == 422
+        assert client.put("/diary/today", json=_entry(notes="x" * 2001)).status_code == 422
+    finally:
+        app.dependency_overrides.clear()
