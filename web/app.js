@@ -114,12 +114,18 @@
     say(`⚠️ ${e instanceof ApiError ? e.message : 'Что-то пошло не так. Попробуйте ещё раз.'}`, 'notice');
   }
 
-  function stopText() {
+  /**
+   * No flow is waiting for text. Once the questionnaire is done the box stays
+   * usable: typing a question simply starts a consultation, like in any chat.
+   * `locked` is for steps that must be answered with the buttons above.
+   */
+  function stopText(locked = false) {
     textHandler = null;
-    input.disabled = true;
-    sendBtn.disabled = true;
+    const free = !locked && !!(me && me.onboarding_done);
+    input.disabled = !free;
+    sendBtn.disabled = !free;
     input.value = '';
-    input.placeholder = 'Выберите действие в меню ниже';
+    input.placeholder = free ? 'Напишите вопрос о здоровье…' : 'Выберите вариант выше';
   }
 
   function awaitText(placeholder, handler) {
@@ -136,9 +142,15 @@
   $('composer').addEventListener('submit', async (e) => {
     e.preventDefault();
     const text = input.value.trim();
-    if (!text || !textHandler) return;
+    if (!text || input.disabled) return;
     input.value = '';
     sayUser(text);
+    if (!textHandler) {
+      // Free text outside any flow = the start of a consultation for yourself.
+      const flow = newFlow();
+      run(() => beginConsultation(flow, null, null, text));
+      return;
+    }
     try { await textHandler(text); } catch (err) { reportError(err); }
   });
 
@@ -314,6 +326,7 @@
     ['📋 История', () => showHistory()],
     ['👨‍👩‍👧 Семья', () => showFamily()],
     ['⚙️ Мой профиль', () => showProfile()],
+    ['📚 Литература и источники', () => showSources(), 'wide'],
   ];
   const menu = $('menu');
   MENU.forEach(([label, fn, cls]) => {
@@ -344,6 +357,7 @@
       if (e.status !== 401) { showLogin(); showLoginError(e.message); }
       return;
     }
+    stopText();   // now that the profile is known: free text allowed once onboarding is done
     say(WELCOME);
     if (!me.gender || !me.age_range) { setMenuVisible(false); beginOnboarding(); }
     else if (!me.onboarding_done) { setMenuVisible(false); startQuestionnaire('me'); }
@@ -393,6 +407,7 @@
 
   /** Gender, then age, then onCompleted(gender, age). */
   function askGenderAge(flow, onCompleted) {
+    stopText(true);
     const m = say('👤 **Укажите пол:**');
     keyboard(m, [GENDERS.map(([k, label]) => ({
       label,
@@ -430,7 +445,7 @@
       const m = say(text);
 
       if (q.kind === 'choice') {
-        stopText();
+        stopText(true);
         keyboard(m, q.options.map(([k, label]) => [{
           label, onClick: () => { if (current === i) { answers[q.key] = k; step(i + 1); } },
         }]), { flow });
@@ -475,6 +490,7 @@
     say('✅ **Анкета здоровья заполнена!**\n\nТеперь мои рекомендации будут максимально точными и безопасными для вас.\n\n' +
         'Обновить данные можно в любое время — кнопка «⚙️ Мой профиль» в меню.');
     setMenuVisible(true);
+    stopText();   // onboarding is done: the box now takes free text
     say('Выберите действие 👇');
   }
 
@@ -513,7 +529,6 @@
     const m = say(profileSummary(me));
     keyboard(m, [
       [{ label: '✏️ Обновить анкету', onClick: () => startQuestionnaire() }],
-      [{ label: '📚 Источники рекомендаций', onClick: () => showSources() }],
       [{ label: '✈️ Тот же бот в Telegram', href: 'https://t.me/impact_doctor_bot' }],
       [{ label: '🚪 Выйти', onClick: () => logout() }],
       [{ label: '🗑 Удалить аккаунт', danger: true, onClick: () => confirmDeleteAccount() }],
@@ -538,24 +553,35 @@
 
   async function showSources() {
     const data = await api('/sources');
-    const frag = document.createDocumentFragment();
-    frag.append(rich('📚 **Источники рекомендаций**\n'));
-    const group = (title, groups) => {
+    const catalog = data.catalog || [];
+    const other = data.other || [];
+    const unique = new Set([...catalog, ...other].flatMap((g) => g.sources.map((s) => s.url || s.title)));
+
+    say('📚 **Литература и источники**\n\n' +
+      'На эти публикации опираются проверки безопасности бота: противопоказания, взаимодействия добавок ' +
+      'с лекарствами и друг с другом, удачные сочетания. ' +
+      `Всего источников: ${unique.size}.\n\n` +
+      '⚠️ Свободные ответы в консультации формирует языковая модель — это не цитаты из списка ниже. ' +
+      'Источники подтверждают правила проверки безопасности и справочные карточки. ' +
+      'Всё это справочная информация, а не медицинская рекомендация и не диагноз.');
+
+    const section = (title, groups) => {
       if (!groups.length) return;
-      frag.append(rich(`\n**${title}**\n`));
+      const frag = document.createDocumentFragment();
+      frag.append(rich(`${title}\n`));
       groups.forEach((g) => {
-        frag.append(rich(`${g.names.join(', ')}\n`));
-        g.sources.forEach((s) => {
+        frag.append(rich(`\n**${g.names.join(', ')}**\n`));
+        g.sources.forEach((s, i) => {
           const u = s.url && safeUrl(s.url);
-          frag.append(document.createTextNode('• '));
+          frag.append(document.createTextNode(`${i + 1}. `));
           frag.append(u ? el('a', { href: u, target: '_blank', rel: 'noopener noreferrer' }, s.title) : document.createTextNode(s.title));
           frag.append(document.createTextNode('\n'));
         });
       });
+      addMsg('bot', frag, 'wide');
     };
-    group('Продукты каталога', data.catalog || []);
-    group('Другие добавки (только справочно)', data.other || []);
-    addMsg('bot', frag);
+    section('💊 **Продукты каталога**', catalog);
+    section('💡 **Другие добавки** (только справочная информация)', other);
   }
 
   // ── 🤖 Консультация ──────────────────────────────────────────────────────
@@ -573,12 +599,15 @@
     ], { flow });
   }
 
-  async function beginConsultation(flow, memberId, memberName) {
+  /** firstText: the user already typed their first message into the free-text box. */
+  async function beginConsultation(flow, memberId, memberName, firstText) {
     const s = await api('/consultations', { method: 'POST', body: { family_member_id: memberId } });
     if (flow !== flowId) return;
-    say(`🤖 **Консультация с ИИ**${memberName ? ` — для ${memberName}` : ''}\n\n${s.opening_prompt}\n\n${ASSISTANT_NOTE}`);
+    if (!firstText) {
+      say(`🤖 **Консультация с ИИ**${memberName ? ` — для ${memberName}` : ''}\n\n${s.opening_prompt}\n\n${ASSISTANT_NOTE}`);
+    }
     let sending = false;
-    awaitText('Опишите, что вас беспокоит…', async (text) => {
+    const turn = async (text) => {
       if (sending) return;
       sending = true;
       const done = typing();
@@ -589,7 +618,7 @@
         renderAnswer(flow, r);
         if (r.session_status === 'completed') {
           stopText();
-          say('Консультация завершена. Если появятся новые вопросы — начните новую через «🤖 Консультация с ИИ».');
+          say('Консультация завершена. Новый вопрос можно просто написать ниже.');
         }
       } catch (e) {
         done();
@@ -598,7 +627,9 @@
       } finally {
         sending = false;
       }
-    });
+    };
+    awaitText('Опишите, что вас беспокоит…', turn);
+    if (firstText) await turn(firstText);
   }
 
   function renderAnswer(flow, r) {

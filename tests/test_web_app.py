@@ -111,3 +111,11 @@ def test_pages_link_to_the_telegram_bot_safely():
     assert len(links) == 2                                  # login card + chat header
     assert all('rel="noopener noreferrer"' in a and 'target="_blank"' in a for a in links)
     assert "https://t.me/impact_doctor_bot" in js            # profile menu button
+
+
+def test_main_menu_has_a_literature_section_and_free_text_starts_a_consultation():
+    js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    assert "'📚 Литература и источники'" in js
+    assert "'/sources'" in js
+    # typing outside any flow must start a consultation, not be ignored
+    assert "beginConsultation(flow, null, null, text)" in js
