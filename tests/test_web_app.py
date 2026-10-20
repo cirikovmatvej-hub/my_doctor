@@ -102,3 +102,12 @@ def test_oversized_profile_and_family_fields_are_rejected(tmp_path):
         assert client.post("/family", json={"name": "Ваня", "relation": "сын"}).status_code == 200
     finally:
         app.dependency_overrides.clear()
+
+
+def test_pages_link_to_the_telegram_bot_safely():
+    html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    links = re.findall(r'<a[^>]*href="https://t\.me/impact_doctor_bot"[^>]*>', html)
+    assert len(links) == 2                                  # login card + chat header
+    assert all('rel="noopener noreferrer"' in a and 'target="_blank"' in a for a in links)
+    assert "https://t.me/impact_doctor_bot" in js            # profile menu button

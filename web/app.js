@@ -514,6 +514,7 @@
     keyboard(m, [
       [{ label: '✏️ Обновить анкету', onClick: () => startQuestionnaire() }],
       [{ label: '📚 Источники рекомендаций', onClick: () => showSources() }],
+      [{ label: '✈️ Тот же бот в Telegram', href: 'https://t.me/impact_doctor_bot' }],
       [{ label: '🚪 Выйти', onClick: () => logout() }],
       [{ label: '🗑 Удалить аккаунт', danger: true, onClick: () => confirmDeleteAccount() }],
     ], { flow });
