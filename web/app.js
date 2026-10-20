@@ -828,7 +828,7 @@
     true: { 1: '😌', 2: '🙂', 3: '😐', 4: '😟', 5: '😰' },
   };
   const METRIC_LABEL = { sleep: 'Сон', energy: 'Энергия', stress: 'Стресс' };
-  const METRIC_COLOR = { sleep: '#4C72B0', energy: '#DD8452', stress: '#C44E52' };
+  const METRIC_COLOR = { sleep: '#6f8fb3', energy: '#c9a27a', stress: '#b9807c' };
 
   function ratingRows(onPick, reverse) {
     const b = [1, 2, 3, 4, 5].map((i) => ({
