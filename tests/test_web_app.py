@@ -115,7 +115,20 @@ def test_pages_link_to_the_telegram_bot_safely():
 
 def test_main_menu_has_a_literature_section_and_free_text_starts_a_consultation():
     js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
-    assert "'📚 Литература и источники'" in js
+    assert "label: 'Литература и источники'" in js
     assert "'/sources'" in js
     # typing outside any flow must start a consultation, not be ignored
     assert "beginConsultation(flow, null, null, text)" in js
+
+
+def test_menu_lives_in_a_sidebar_and_the_questionnaire_is_a_form():
+    html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    assert 'id="sidebar"' in html and 'id="nav"' in html and 'id="burger"' in html
+    assert 'id="menu"' not in html                       # the bottom keyboard is gone
+    for section in ("Консультация с ИИ", "Подбор БАД", "Мой трекер", "Дневник", "История",
+                    "Семья", "Мой профиль", "Литература и источники"):
+        assert f"label: '{section}'" in js, section
+    # the questionnaire is a form, not chat steps
+    assert "function openProfileForm" in js
+    assert "runQuestionnaire" not in js and "askGenderAge" not in js

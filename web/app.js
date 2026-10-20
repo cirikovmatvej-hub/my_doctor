@@ -251,6 +251,8 @@
     store.del(TOKEN_KEY);
     flowId += 1;
     stopText();
+    hideForm();
+    openDrawer(false);
     showLogin();
     if (expired) showLoginError('Сессия истекла. Войдите снова.');
   }
@@ -316,26 +318,74 @@
 
   $('change-email').addEventListener('click', resetLoginForm);
 
-  // ── Main menu ────────────────────────────────────────────────────────────
+  // ── Navigation: sidebar with every section ──────────────────────────────
+
+  const nav = $('nav');
+  const sidebar = $('sidebar');
+  const backdrop = $('backdrop');
+  const burger = $('burger');
+  const mainEl = document.querySelector('.main');
+  const formView = $('form-view');
 
   const MENU = [
-    ['🤖 Консультация с ИИ', () => startConsultation(), 'wide'],
-    ['💊 Подбор БАД', () => startAdvisor()],
-    ['📊 Мой трекер', () => showTracker()],
-    ['📔 Дневник', () => showDiary()],
-    ['📋 История', () => showHistory()],
-    ['👨‍👩‍👧 Семья', () => showFamily()],
-    ['⚙️ Мой профиль', () => showProfile()],
-    ['📚 Литература и источники', () => showSources(), 'wide'],
+    { id: 'consult', icon: '🤖', label: 'Консультация с ИИ', run: () => startConsultation() },
+    { id: 'advisor', icon: '💊', label: 'Подбор БАД', run: () => startAdvisor() },
+    { id: 'tracker', icon: '📊', label: 'Мой трекер', run: () => showTracker() },
+    { id: 'diary', icon: '📔', label: 'Дневник', run: () => showDiary() },
+    { id: 'history', icon: '📋', label: 'История', run: () => showHistory() },
+    { id: 'family', icon: '👨‍👩‍👧', label: 'Семья', run: () => showFamily() },
+    { id: 'profile', icon: '⚙️', label: 'Мой профиль', run: () => showProfile() },
+    { id: 'sources', icon: '📚', label: 'Литература и источники', run: () => showSources() },
   ];
-  const menu = $('menu');
-  MENU.forEach(([label, fn, cls]) => {
-    menu.append(el('button', {
-      type: 'button', class: cls || '',
-      onclick: () => { sayUser(label); newFlow(); run(fn); },
-    }, label));
+  const navButtons = new Map();
+  MENU.forEach((item) => {
+    const b = el('button', { type: 'button' }, el('span', { class: 'ico', 'aria-hidden': 'true' }, item.icon), item.label);
+    b.addEventListener('click', () => openSection(item.id));
+    nav.append(b);
+    navButtons.set(item.id, b);
   });
-  const setMenuVisible = (v) => { menu.hidden = !v; };
+
+  function setActive(id) {
+    navButtons.forEach((b, k) => { if (k === id) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
+    const item = MENU.find((m) => m.id === id);
+    $('section-title').textContent = item ? item.label : 'Мой Доктор';
+  }
+  const setNavLocked = (locked) => navButtons.forEach((b) => { b.disabled = locked; });
+
+  function openDrawer(open) {
+    sidebar.classList.toggle('open', open);
+    backdrop.hidden = !open;
+    burger.setAttribute('aria-expanded', String(open));
+  }
+  burger.addEventListener('click', () => openDrawer(!sidebar.classList.contains('open')));
+  backdrop.addEventListener('click', () => openDrawer(false));
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') openDrawer(false); });
+  $('logout').addEventListener('click', () => logout());
+
+  function hideForm() {
+    mainEl.classList.remove('is-form');
+    formView.hidden = true;
+    formView.replaceChildren();
+  }
+  function showFormView(node) {
+    newFlow();
+    formView.replaceChildren(node);
+    formView.hidden = false;
+    mainEl.classList.add('is-form');
+    formView.scrollTop = 0;
+  }
+
+  /** Every section is its own page: the stream is cleared, then the section renders into it. */
+  function openSection(id) {
+    const item = MENU.find((m) => m.id === id);
+    if (!item) return;
+    hideForm();
+    newFlow();
+    msgs.replaceChildren();
+    setActive(id);
+    openDrawer(false);
+    run(item.run);
+  }
 
   const WELCOME =
     '👋 Привет! Я **Мой Доктор** — ваш персональный помощник по здоровью.\n\n' +
@@ -346,9 +396,12 @@
     '📔 **Дневник** — слежу за вашим самочувствием в динамике\n\n' +
     '⚠️ Важно: я не ставлю диагнозы и не заменяю очного врача.';
 
+  const HOME_HINT = 'Выберите раздел в меню слева (на телефоне — кнопка ☰ вверху).';
+
   async function boot() {
     $('login').hidden = true;
     $('chat').hidden = false;
+    hideForm();
     msgs.replaceChildren();
     newFlow();
     try {
@@ -357,17 +410,22 @@
       if (e.status !== 401) { showLogin(); showLoginError(e.message); }
       return;
     }
-    stopText();   // now that the profile is known: free text allowed once onboarding is done
+    setActive(null);
+    if (!me.gender || !me.age_range || !me.onboarding_done) {
+      setNavLocked(true);
+      openMyProfileForm({ firstTime: true });
+      return;
+    }
+    setNavLocked(false);
+    stopText();   // profile is known and complete: the box takes free text
     say(WELCOME);
-    if (!me.gender || !me.age_range) { setMenuVisible(false); beginOnboarding(); }
-    else if (!me.onboarding_done) { setMenuVisible(false); startQuestionnaire('me'); }
-    else { setMenuVisible(true); say('Выберите действие 👇'); }
+    say(HOME_HINT);
   }
 
-  // ── Profile questionnaire (same questions and answers as the bot) ────────
+  // ── Profile questionnaire: one scrolling form of question cards ─────────
 
-  const GENDERS = [['male', '👨 Мужской'], ['female', '👩 Женский']];
-  const AGES = [['under_18', 'До 18 лет'], ['18_30', '18–30 лет'], ['31_45', '31–45 лет'], ['46_60', '46–60 лет'], ['60_plus', '60+ лет']];
+  const GENDER_OPTIONS = [['male', 'Мужской'], ['female', 'Женский']];
+  const AGE_OPTIONS = [['under_18', 'До 18 лет'], ['18_30', '18–30 лет'], ['31_45', '31–45 лет'], ['46_60', '46–60 лет'], ['60_plus', '60+ лет']];
   const GENDER_LABEL = { male: 'Мужской', female: 'Женский' };
   const AGE_LABEL = { under_18: 'до 18 лет', '18_30': '18–30 лет', '31_45': '31–45 лет', '46_60': '46–60 лет', '60_plus': '60+ лет' };
   const PREGNANCY_LABEL = { pregnant: 'беременность', lactating: 'лактация', no: 'нет' };
@@ -378,120 +436,227 @@
     moderate: 'умеренная активность', high: 'высокая активность',
   };
 
-  const NONE = 'Нет';
+  // Same questions and stored values as the Telegram bot: free text answers are
+  // kept as typed, "Нет" is stored as 'нет', choices as the bot's codes.
   const QUESTIONS = [
-    { key: 'chronic_diseases', icon: '1️⃣', title: 'Хронические заболевания?', hint: 'Диабет, гипертония, заболевания почек, сердца, щитовидной железы…', kind: 'text', none: NONE, value: 'нет' },
-    { key: 'allergies', icon: '2️⃣', title: 'Аллергии?', hint: 'Лекарственные, пищевые, на пыльцу, латекс…', kind: 'text', none: NONE, value: 'нет' },
-    { key: 'medications', icon: '3️⃣', title: 'Постоянно принимаемые лекарства?', hint: 'Гормоны, антикоагулянты, антидепрессанты, антибиотики…', kind: 'text', none: NONE, value: 'нет' },
+    { key: 'chronic_diseases', title: 'Хронические заболевания?', hint: 'Диабет, гипертония, заболевания почек, сердца, щитовидной железы…', kind: 'text', value: 'нет' },
+    { key: 'allergies', title: 'Аллергии?', hint: 'Лекарственные, пищевые, на пыльцу, латекс…', kind: 'text', value: 'нет' },
+    { key: 'medications', title: 'Постоянно принимаемые лекарства?', hint: 'Гормоны, антикоагулянты, антидепрессанты, антибиотики…', kind: 'text', value: 'нет' },
     {
-      key: 'pregnancy', icon: '4️⃣', title: 'Беременность или лактация?', kind: 'choice', femaleOnly: true,
-      options: [['pregnant', '🤰 Да, беременна'], ['lactating', '🤱 Лактация'], ['no', '❌ Нет / Не применимо']],
+      key: 'pregnancy', title: 'Беременность или лактация?', kind: 'choice', femaleOnly: true,
+      options: [['pregnant', 'Да, беременна'], ['lactating', 'Лактация'], ['no', 'Нет / Не применимо']],
     },
-    { key: 'past_surgeries', icon: '5️⃣', title: 'Перенесённые операции или госпитализации?', hint: 'Операции на сердце, ЖКТ, суставах; серьёзные травмы…', kind: 'text', none: NONE, value: 'нет' },
-    { key: 'hereditary_diseases', icon: '6️⃣', title: 'Наследственные заболевания в семье?', hint: 'Диабет, рак, болезни сердца, инсульт у близких родственников…', kind: 'text', none: NONE, value: 'нет' },
+    { key: 'past_surgeries', title: 'Перенесённые операции или госпитализации?', hint: 'Операции на сердце, ЖКТ, суставах; серьёзные травмы…', kind: 'text', value: 'нет' },
+    { key: 'hereditary_diseases', title: 'Наследственные заболевания в семье?', hint: 'Диабет, рак, болезни сердца, инсульт у близких родственников…', kind: 'text', value: 'нет' },
     {
-      key: 'smoking', icon: '7️⃣', title: 'Курение?', kind: 'choice',
-      options: [['never', '🚭 Не курю'], ['former', '🕰 Бросил(а)'], ['light', '🚬 Иногда (до 5/день)'], ['heavy', '🚬 Регулярно (5+/день)']],
-    },
-    {
-      key: 'alcohol', icon: '8️⃣', title: 'Алкоголь?', kind: 'choice',
-      options: [['never', '🚫 Не употребляю'], ['rarely', '🥂 Редко (по праздникам)'], ['moderate', '🍷 Умеренно (1–2р/нед)'], ['frequent', '🍺 Часто (почти каждый день)']],
+      key: 'smoking', title: 'Курение?', kind: 'choice',
+      options: [['never', 'Не курю'], ['former', 'Бросил(а)'], ['light', 'Иногда (до 5/день)'], ['heavy', 'Регулярно (5+/день)']],
     },
     {
-      key: 'physical_activity', icon: '9️⃣', title: 'Уровень физической активности?', kind: 'choice',
-      options: [['sedentary', '🛋 Сидячий (почти нет движения)'], ['light', '🚶 Лёгкая (прогулки, зарядка)'], ['moderate', '🏃 Умеренная (3–4 тренировки/нед)'], ['high', '💪 Высокая (ежедневные нагрузки)']],
+      key: 'alcohol', title: 'Алкоголь?', kind: 'choice',
+      options: [['never', 'Не употребляю'], ['rarely', 'Редко (по праздникам)'], ['moderate', 'Умеренно (1–2 раза в неделю)'], ['frequent', 'Часто (почти каждый день)']],
     },
-    { key: 'height_weight', icon: '🔟', title: 'Рост и вес?', hint: 'Например: 175 / 70', kind: 'text', none: 'Пропустить', value: 'не указано' },
+    {
+      key: 'physical_activity', title: 'Уровень физической активности?', kind: 'choice',
+      options: [['sedentary', 'Сидячий (почти нет движения)'], ['light', 'Лёгкая (прогулки, зарядка)'], ['moderate', 'Умеренная (3–4 тренировки в неделю)'], ['high', 'Высокая (ежедневные нагрузки)']],
+    },
+    { key: 'height_weight', title: 'Рост и вес', hint: 'Например: 175 / 70. Этот вопрос можно пропустить.', kind: 'text', optional: true, value: 'не указано' },
   ];
   const MAX_ANSWER = 500;
+  let formSeq = 0;
 
-  /** Gender, then age, then onCompleted(gender, age). */
-  function askGenderAge(flow, onCompleted) {
-    stopText(true);
-    const m = say('👤 **Укажите пол:**');
-    keyboard(m, [GENDERS.map(([k, label]) => ({
-      label,
-      onClick: () => {
-        const m2 = say(`👤 Пол: **${GENDER_LABEL[k]}**\n\n📅 **Укажите возраст:**`);
-        const btn = ([a, label2]) => ({
-          label: label2,
-          onClick: () => {
-            say(`📅 Возраст: **${AGE_LABEL[a]}**`);
-            onCompleted(k, a);
-          },
-        });
-        keyboard(m2, [AGES.slice(0, 2).map(btn), AGES.slice(2, 4).map(btn), AGES.slice(4).map(btn)], { flow });
-      },
-    }))], { flow });
-  }
+  /**
+   * Opens the questionnaire as a single scrolling form.
+   * opts: { title, intro, withName, initial, submitLabel, onCancel, onSubmit(values) }
+   * values: { name?, relation?, gender, age_range, <one key per answered question> }
+   */
+  function openProfileForm(opts) {
+    formSeq += 1;
+    const uid = `f${formSeq}`;
+    const initial = opts.initial || {};
+    const entries = [];
+    const form = el('form', { class: 'pform', novalidate: '' });
+    const fill = el('div', { class: 'fill' });
+    const progress = el('span', {});
+    const formError = el('p', { class: 'q-error', role: 'alert', hidden: '' });
 
-  /** Runs the health questionnaire; calls onDone(answers) with the bot's stored values. */
-  function runQuestionnaire(flow, gender, onDone) {
-    const qs = QUESTIONS.filter((q) => !(q.femaleOnly && gender !== 'female'));
-    const total = gender === 'female' ? 10 : 9;
-    const answers = {};
-    let current = -1;
+    const clearError = (entry) => { entry.card.classList.remove('invalid'); entry.err.hidden = true; };
+    const setError = (entry, text) => { entry.card.classList.add('invalid'); entry.err.textContent = text; entry.err.hidden = false; };
 
-    const step = (i) => {
-      if (flow !== flowId) return;
-      current = i;
-      if (i >= qs.length) { stopText(); onDone(answers); return; }
-      const q = qs[i];
-      const orig = QUESTIONS.indexOf(q) + 1;
-      const n = gender === 'female' || orig <= 4 ? orig : orig - 1;   // men skip question 4
-      const text = `${q.icon} **${q.title}** (${n}/${total})` +
-        (q.hint ? `\n${q.hint}` : '') +
-        (q.kind === 'text' ? `\n\nНапишите или нажмите «${q.none}».` : '');
-      const m = say(text);
-
-      if (q.kind === 'choice') {
-        stopText(true);
-        keyboard(m, q.options.map(([k, label]) => [{
-          label, onClick: () => { if (current === i) { answers[q.key] = k; step(i + 1); } },
-        }]), { flow });
-      } else {
-        keyboard(m, [[{
-          label: q.none,
-          onClick: () => { if (current === i) { answers[q.key] = q.value; step(i + 1); } },
-        }]], { flow });
-        awaitText('Ваш ответ…', (t) => {
-          if (current !== i) return;
-          answers[q.key] = t.slice(0, MAX_ANSWER);
-          step(i + 1);
-        });
-      }
+    const update = () => {
+      const active = entries.filter((en) => en.required && !en.card.hidden);
+      const done = active.filter((en) => en.read() !== null).length;
+      progress.textContent = `Заполнено ${done} из ${active.length}`;
+      fill.style.width = `${active.length ? Math.round((done / active.length) * 100) : 0}%`;
     };
-    step(0);
-  }
 
-  function beginOnboarding() {
-    const flow = newFlow();
-    say('👤 Прежде чем начать — несколько коротких вопросов.');
-    askGenderAge(flow, (gender, age) => {
-      say('🏥 **Анкета здоровья**\nЗаполняется один раз. Помогает давать безопасные и точные рекомендации.');
-      runQuestionnaire(flow, gender, (answers) => saveMyProfile(gender, age, answers));
-    });
-  }
+    const makeCard = (key, title, hint, required) => {
+      const titleId = `${uid}-${key}-t`;
+      const node = el('div', { class: 'q', role: 'group', 'aria-labelledby': titleId },
+        el('div', { class: 'qtitle', id: titleId }, title, required ? el('span', { class: 'req', 'aria-hidden': 'true' }, ' *') : ''));
+      if (hint) node.append(el('p', { class: 'hint' }, hint));
+      return { node, err: el('p', { class: 'q-error', role: 'alert', hidden: '' }) };
+    };
+    const addEntry = (entry) => { entries.push(entry); form.append(entry.card); return entry; };
 
-  function startQuestionnaire() {
-    const flow = newFlow();
-    say('🏥 **Анкета здоровья**\nЗаполняется один раз. Помогает давать безопасные и точные рекомендации.');
-    runQuestionnaire(flow, me.gender, (answers) => saveMyProfile(me.gender, me.age_range, answers));
-  }
+    const radioEntry = ({ key, title, hint, options, value, required = true, onChange }) => {
+      const { node, err } = makeCard(key, title, hint, required);
+      const inputs = options.map(([val, label]) => {
+        const input = el('input', { type: 'radio', name: `${uid}-${key}`, value: val });
+        input.checked = value === val;
+        input.addEventListener('change', () => { clearError(entry); if (onChange) onChange(val); update(); });
+        node.append(el('label', { class: 'opt' }, input, el('span', { class: 'txt' }, label)));
+        return input;
+      });
+      node.append(err);
+      const entry = {
+        key, card: node, err, required,
+        read: () => { const c = inputs.find((i) => i.checked); return c ? c.value : null; },
+        focus: () => inputs[0].focus(),
+      };
+      return addEntry(entry);
+    };
 
-  async function saveMyProfile(gender, age, answers) {
-    try {
-      me = await api('/me/profile', { method: 'PUT', body: { gender, age_range: age, ...answers } });
-    } catch (e) {
-      reportError(e);
-      say('Анкету не удалось сохранить. Откройте «⚙️ Мой профиль», чтобы заполнить её снова.');
-      return;
+    const textEntry = ({ key, title, hint, value, required, maxLength, placeholder, emptyValue }) => {
+      const { node, err } = makeCard(key, title, hint, required);
+      const input = el('input', {
+        class: 'finput', type: 'text', maxlength: String(maxLength),
+        placeholder: placeholder || 'Ваш ответ', 'aria-labelledby': `${uid}-${key}-t`,
+      });
+      input.value = value || '';
+      input.addEventListener('input', () => { clearError(entry); update(); });
+      node.append(input, err);
+      const entry = {
+        key, card: node, err, required,
+        read: () => { const t = input.value.trim(); return t || (required ? null : (emptyValue === undefined ? null : emptyValue)); },
+        focus: () => input.focus(),
+      };
+      return addEntry(entry);
+    };
+
+    // "Нет" or "Да, укажу: …" — stored the way the bot stores it: 'нет' or the typed text.
+    const textNoEntry = (q, current) => {
+      const { node, err } = makeCard(q.key, q.title, q.hint, true);
+      const name = `${uid}-${q.key}`;
+      const no = el('input', { type: 'radio', name, value: 'no' });
+      const yes = el('input', { type: 'radio', name, value: 'yes' });
+      const text = el('input', {
+        class: 'finput', type: 'text', maxlength: String(MAX_ANSWER),
+        placeholder: 'Опишите', 'aria-label': `${q.title} — опишите`,
+      });
+      if (current === 'нет') no.checked = true;
+      else if (current && current !== 'не указано') { yes.checked = true; text.value = current; }
+      const picked = () => { clearError(entry); update(); };
+      no.addEventListener('change', picked);
+      yes.addEventListener('change', () => { picked(); text.focus(); });
+      text.addEventListener('input', () => { yes.checked = true; picked(); });
+      node.append(
+        el('label', { class: 'opt' }, no, el('span', { class: 'txt' }, 'Нет')),
+        el('label', { class: 'opt' }, yes, el('span', { class: 'txt' }, 'Да, укажу:')),
+        text, err,
+      );
+      const entry = {
+        key: q.key, card: node, err, required: true, errorText: 'Выберите «Нет» или опишите',
+        read: () => { if (no.checked) return q.value; if (yes.checked) return text.value.trim() || null; return null; },
+        focus: () => no.focus(),
+      };
+      return addEntry(entry);
+    };
+
+    form.append(
+      el('div', { class: 'fprogress' },
+        el('div', { class: 'label' }, progress, el('span', {}, '* — обязательный вопрос')),
+        el('div', { class: 'track' }, fill)),
+      el('div', { class: 'fhead' }, el('h2', {}, opts.title), el('p', {}, opts.intro || '')),
+    );
+
+    if (opts.withName) {
+      textEntry({ key: 'name', title: 'Как зовут этого человека?', hint: 'Например: Ваня, Мама, Бабушка', required: true, maxLength: 100, placeholder: 'Имя' });
+      radioEntry({ key: 'relation', title: 'Кем он вам приходится?', options: RELATIONS.map((r) => [r, r]), value: null });
     }
-    say('✅ **Анкета здоровья заполнена!**\n\nТеперь мои рекомендации будут максимально точными и безопасными для вас.\n\n' +
-        'Обновить данные можно в любое время — кнопка «⚙️ Мой профиль» в меню.');
-    setMenuVisible(true);
-    stopText();   // onboarding is done: the box now takes free text
-    say('Выберите действие 👇');
+
+    let pregnancy = null;
+    radioEntry({
+      key: 'gender', title: 'Пол', options: GENDER_OPTIONS, value: initial.gender || null,
+      onChange: (v) => { if (pregnancy) pregnancy.card.hidden = v !== 'female'; },
+    });
+    radioEntry({ key: 'age_range', title: 'Возраст', options: AGE_OPTIONS, value: initial.age_range || null });
+
+    QUESTIONS.forEach((q) => {
+      if (q.kind === 'choice') {
+        const entry = radioEntry({ key: q.key, title: q.title, hint: q.hint, options: q.options, value: initial[q.key] || null });
+        if (q.femaleOnly) { pregnancy = entry; entry.card.hidden = initial.gender !== 'female'; }
+      } else if (q.optional) {
+        const v = initial[q.key];
+        textEntry({
+          key: q.key, title: q.title, hint: q.hint, value: v === 'не указано' ? '' : v,
+          required: false, maxLength: MAX_ANSWER, placeholder: '175 / 70', emptyValue: q.value,
+        });
+      } else {
+        textNoEntry(q, initial[q.key]);
+      }
+    });
+
+    const submit = el('button', { class: 'primary', type: 'submit' }, opts.submitLabel || 'Сохранить');
+    const actions = el('div', { class: 'factions' });
+    if (opts.onCancel) actions.append(el('button', { class: 'link', type: 'button', onclick: opts.onCancel }, 'Отмена'));
+    actions.append(submit);
+    form.append(formError, actions);
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      formError.hidden = true;
+      const values = {};
+      let first = null;
+      entries.forEach((en) => {
+        if (en.card.hidden) return;
+        const v = en.read();
+        if (v === null) {
+          if (en.required) { setError(en, en.errorText || 'Обязательный вопрос'); first = first || en; }
+        } else {
+          values[en.key] = v;
+        }
+      });
+      if (first) { first.card.scrollIntoView({ block: 'center' }); first.focus(); return; }
+      const label = submit.textContent;
+      submit.disabled = true;
+      submit.textContent = 'Сохраняю…';
+      try {
+        await opts.onSubmit(values);
+      } catch (err) {
+        formError.textContent = err instanceof ApiError ? err.message : 'Не удалось сохранить. Попробуйте ещё раз.';
+        formError.hidden = false;
+      } finally {
+        submit.disabled = false;
+        submit.textContent = label;
+      }
+    });
+
+    update();
+    showFormView(form);
+  }
+
+  function openMyProfileForm({ firstTime }) {
+    openProfileForm({
+      title: firstTime ? 'Анкета здоровья' : 'Обновить анкету',
+      intro: 'Заполняется один раз. Нужна, чтобы проверять добавки на противопоказания и давать безопасные рекомендации. ' +
+        'Обновить ответы можно в любое время в разделе «Мой профиль».',
+      initial: me,
+      submitLabel: firstTime ? 'Сохранить и начать' : 'Сохранить',
+      onCancel: firstTime ? null : () => openSection('profile'),
+      onSubmit: async (values) => {
+        me = await api('/me/profile', { method: 'PUT', body: values });
+        setNavLocked(false);
+        if (!firstTime) { openSection('profile'); return; }
+        hideForm();
+        msgs.replaceChildren();
+        setActive(null);
+        stopText();   // onboarding is done: the box now takes free text
+        say('✅ **Анкета заполнена!**\n\nТеперь рекомендации будут учитывать ваши данные.');
+        say(WELCOME);
+        say(HOME_HINT);
+      },
+    });
   }
 
   // ── ⚙️ Профиль ───────────────────────────────────────────────────────────
@@ -522,13 +687,12 @@
     const flow = flowId;
     me = await api('/me');
     if (!me.onboarding_done) {
-      say('📋 Анкета здоровья ещё не заполнена.\n\nДавайте заполним её сейчас!');
-      if (!me.gender || !me.age_range) beginOnboarding(); else startQuestionnaire();
+      openMyProfileForm({ firstTime: true });
       return;
     }
     const m = say(profileSummary(me));
     keyboard(m, [
-      [{ label: '✏️ Обновить анкету', onClick: () => startQuestionnaire() }],
+      [{ label: '✏️ Обновить анкету', onClick: () => openMyProfileForm({ firstTime: false }) }],
       [{ label: '✈️ Тот же бот в Telegram', href: 'https://t.me/impact_doctor_bot' }],
       [{ label: '🚪 Выйти', onClick: () => logout() }],
       [{ label: '🗑 Удалить аккаунт', danger: true, onClick: () => confirmDeleteAccount() }],
@@ -770,7 +934,7 @@
 
   function trackerFooter(m, flow) {
     keyboard(m, [
-      [{ label: '💊 Подбор БАД', onClick: () => startAdvisor() }],
+      [{ label: '💊 Подбор БАД', onClick: () => openSection('advisor') }],
       [{ label: '➕ Своя добавка', onClick: () => askCustomCourse(null) }],
       [{ label: '📜 История курсов', onClick: () => showCourseHistory() }],
     ], { flow, sticky: true });
@@ -1003,41 +1167,45 @@
     const m = say(summary);
     keyboard(m, [
       [{ label: `🤖 Консультация для ${f.name}`, onClick: () => { newFlow(); return beginConsultation(flowId, f.id, f.name); } }],
-      [{ label: '✏️ Заполнить анкету', onClick: () => fillMemberProfile(f.id, f.name) }],
+      [{ label: '✏️ Заполнить анкету', onClick: () => fillMemberProfile(f) }],
       [{ label: '🗑 Удалить', danger: true, onClick: () => confirmRemoveMember(flow, f) }],
     ], { flow, sticky: true });
   }
 
-  function fillMemberProfile(memberId, name) {
-    const flow = newFlow();
-    say(`🏥 **Анкета: ${name}**`);
-    askGenderAge(flow, (gender, age) => {
-      runQuestionnaire(flow, gender, async (answers) => {
-        try {
-          await api(`/family/${memberId}/profile`, { method: 'PUT', body: { gender, age_range: age, ...answers } });
-          say(`✅ Анкета для **${name}** сохранена.`);
-        } catch (e) { reportError(e); }
-      });
+  function fillMemberProfile(f) {
+    openProfileForm({
+      title: `Анкета: ${f.name}`,
+      intro: `Ответы для консультаций: ${f.name} (${f.relation}).`,
+      initial: f,
+      submitLabel: 'Сохранить',
+      onCancel: () => openSection('family'),
+      onSubmit: async (values) => {
+        await api(`/family/${f.id}/profile`, { method: 'PUT', body: values });
+        openSection('family');
+      },
     });
   }
 
   function addMember() {
-    const flow = newFlow();
-    say('Как зовут этого человека?\nНапример: Ваня, Мама, Бабушка');
-    awaitText('Имя', (t) => {
-      const name = t.trim().slice(0, 100);
-      if (!name) return;
-      stopText();
-      const m = say(`Кем вам приходится **${name}**?`);
-      const btn = (r) => ({
-        label: r,
-        onClick: async () => {
-          const f = await api('/family', { method: 'POST', body: { name, relation: r } });
-          say(`✅ **${f.name}** добавлен(а).`);
-          fillMemberProfile(f.id, f.name);
-        },
-      });
-      keyboard(m, [RELATIONS.slice(0, 3).map(btn), RELATIONS.slice(3, 6).map(btn), RELATIONS.slice(6).map(btn)], { flow });
+    openProfileForm({
+      title: 'Новый член семьи',
+      intro: 'Укажите, кто это, и заполните анкету здоровья: консультации для этого человека будут учитывать её. ' +
+        'Добавляйте только тех, кто согласен, или тех, чьим законным представителем вы являетесь.',
+      withName: true,
+      submitLabel: 'Добавить',
+      onCancel: () => openSection('family'),
+      onSubmit: async (values) => {
+        const { name, relation, ...profile } = values;
+        const f = await api('/family', { method: 'POST', body: { name, relation } });
+        try {
+          await api(`/family/${f.id}/profile`, { method: 'PUT', body: profile });
+        } catch (e) {
+          openSection('family');
+          say(`⚠️ ${f.name} добавлен(а), но анкету сохранить не удалось. Откройте карточку и заполните её снова.`, 'notice');
+          return;
+        }
+        openSection('family');
+      },
     });
   }
 

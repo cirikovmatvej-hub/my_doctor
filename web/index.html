@@ -45,25 +45,39 @@
     </div>
   </main>
 
-  <!-- Chat -->
-  <div id="chat" class="chat" hidden>
-    <header class="chat-header">
-      <div class="avatar" aria-hidden="true">✚</div>
-      <div>
-        <div class="title">Мой Доктор</div>
-        <div class="subtitle">помощник по здоровью</div>
+  <!-- App: sidebar + main column -->
+  <div id="chat" class="shell" hidden>
+    <div id="backdrop" class="backdrop" hidden></div>
+
+    <aside id="sidebar" class="sidebar" aria-label="Разделы">
+      <div class="brand">
+        <div class="avatar" aria-hidden="true">✚</div>
+        <div>
+          <div class="title">Мой Доктор</div>
+          <div class="subtitle">помощник по здоровью</div>
+        </div>
       </div>
-      <a class="tg-link" href="https://t.me/impact_doctor_bot" target="_blank" rel="noopener noreferrer">✈️ Telegram</a>
-    </header>
+      <nav id="nav" class="nav" aria-label="Главное меню"></nav>
+      <div class="side-foot">
+        <a class="tg-link" href="https://t.me/impact_doctor_bot" target="_blank" rel="noopener noreferrer">✈️ Бот в Telegram</a>
+        <button id="logout" type="button" class="link">Выйти</button>
+      </div>
+    </aside>
 
-    <div id="messages" class="messages" role="log" aria-live="polite" aria-label="Диалог"></div>
+    <div class="main">
+      <header class="topbar">
+        <button id="burger" class="icon-btn" type="button" aria-label="Открыть меню" aria-expanded="false">☰</button>
+        <h1 id="section-title" class="section-title">Мой Доктор</h1>
+      </header>
 
-    <form id="composer" class="composer" autocomplete="off">
-      <input id="composer-input" type="text" placeholder="Выберите действие в меню ниже" aria-label="Сообщение" disabled maxlength="2000">
-      <button id="composer-send" type="submit" aria-label="Отправить" disabled>➤</button>
-    </form>
+      <div id="messages" class="messages" role="log" aria-live="polite" aria-label="Диалог"></div>
+      <div id="form-view" class="form-view" hidden></div>
 
-    <nav id="menu" class="menu" aria-label="Главное меню"></nav>
+      <form id="composer" class="composer" autocomplete="off">
+        <input id="composer-input" type="text" placeholder="Напишите вопрос о здоровье…" aria-label="Сообщение" disabled maxlength="2000">
+        <button id="composer-send" type="submit" aria-label="Отправить" disabled>➤</button>
+      </form>
+    </div>
   </div>
 
   <script src="/app.js"></script>
