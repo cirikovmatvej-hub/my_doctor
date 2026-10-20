@@ -16,6 +16,15 @@ class AppleAuthRequest(BaseModel):
     full_name: str | None = None
 
 
+class EmailRequestIn(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+
+
+class EmailVerifyIn(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    code: str = Field(pattern=r"^\d{6}$")
+
+
 class AuthResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -43,23 +52,23 @@ class ProfileOut(BaseModel):
 
 
 class ProfileIn(BaseModel):
-    gender: str
-    age_range: str
-    chronic_diseases: str = "нет"
-    allergies: str = "нет"
-    medications: str = "нет"
-    pregnancy: str = "нет"  # only meaningful when gender == "female"
-    past_surgeries: str = "нет"
-    hereditary_diseases: str = "нет"
-    smoking: str = "не курю"
-    alcohol: str = "не пью"
-    physical_activity: str = "умеренная"
-    height_weight: str = "не указано"
+    gender: str = Field(max_length=50)
+    age_range: str = Field(max_length=50)
+    chronic_diseases: str = Field(default="нет", max_length=500)
+    allergies: str = Field(default="нет", max_length=500)
+    medications: str = Field(default="нет", max_length=500)
+    pregnancy: str = Field(default="нет", max_length=500)  # only meaningful when gender == "female"
+    past_surgeries: str = Field(default="нет", max_length=500)
+    hereditary_diseases: str = Field(default="нет", max_length=500)
+    smoking: str = Field(default="не курю", max_length=500)
+    alcohol: str = Field(default="не пью", max_length=500)
+    physical_activity: str = Field(default="умеренная", max_length=500)
+    height_weight: str = Field(default="не указано", max_length=500)
 
 
 class ProfilePatch(BaseModel):
-    field: str
-    value: str
+    field: str = Field(max_length=50)
+    value: str = Field(max_length=500)
 
 
 class UtcOffsetIn(BaseModel):
@@ -291,23 +300,23 @@ class FamilyMemberSummary(BaseModel):
 
 
 class FamilyMemberCreate(BaseModel):
-    name: str
-    relation: str
+    name: str = Field(min_length=1, max_length=100)
+    relation: str = Field(min_length=1, max_length=50)
 
 
 class FamilyMemberProfileIn(BaseModel):
-    gender: str
-    age_range: str
-    chronic_diseases: str = "нет"
-    allergies: str = "нет"
-    medications: str = "нет"
-    pregnancy: str = "нет"
-    past_surgeries: str = "нет"
-    hereditary_diseases: str = "нет"
-    smoking: str = "не курю"
-    alcohol: str = "не пью"
-    physical_activity: str = "умеренная"
-    height_weight: str = "не указано"
+    gender: str = Field(max_length=50)
+    age_range: str = Field(max_length=50)
+    chronic_diseases: str = Field(default="нет", max_length=500)
+    allergies: str = Field(default="нет", max_length=500)
+    medications: str = Field(default="нет", max_length=500)
+    pregnancy: str = Field(default="нет", max_length=500)
+    past_surgeries: str = Field(default="нет", max_length=500)
+    hereditary_diseases: str = Field(default="нет", max_length=500)
+    smoking: str = Field(default="не курю", max_length=500)
+    alcohol: str = Field(default="не пью", max_length=500)
+    physical_activity: str = Field(default="умеренная", max_length=500)
+    height_weight: str = Field(default="не указано", max_length=500)
 
 
 class AppointmentCreate(BaseModel):

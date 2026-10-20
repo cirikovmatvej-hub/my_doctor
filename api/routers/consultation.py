@@ -19,10 +19,10 @@ from api.schemas import (
     BadOut, ConsultationCreate, ConsultationOut, ConsultationTranscriptOut, DoctorOut,
     MessageIn, MessageOut, TranscriptTurn,
 )
-from config import MAX_QUESTIONS, SHOW_DOCTOR_RECOMMENDATIONS
+from config import MAX_QUESTIONS, SHOW_DOCTOR_RECOMMENDATIONS, WEB_DAILY_MESSAGE_LIMIT
 from data.resources import BAD_DETAILS, BADS, DOCTORS
 from database.db import (
-    add_messages, create_session, get_family_member, get_session, get_session_messages,
+    add_messages, count_recent_user_messages, create_session, get_family_member, get_session, get_session_messages,
     get_user_profile_by_id, set_session_complaint, update_session_summary,
 )
 
@@ -133,6 +133,13 @@ async def _answer_message(
 ) -> MessageOut:
     if session["status"] != "active":
         raise HTTPException(status_code=409, detail="Consultation already completed")
+
+    # Every turn is a paid model call and the web app is public, so one
+    # account can't send unlimited messages. Rolling 24h, counted from saved turns.
+    if await count_recent_user_messages(user_id) >= WEB_DAILY_MESSAGE_LIMIT:
+        raise HTTPException(
+            status_code=429, detail="Достигнут дневной лимит сообщений. Попробуйте завтра.",
+        )
 
     if not session["complaint"]:
         await set_session_complaint(session_id, body.text[:200])

@@ -1,0 +1,6 @@
+# Замените doctor.example.com на ваш домен (A-запись должна указывать на IP сервера).
+# Caddy сам получит и будет продлевать HTTPS-сертификат.
+doctor.example.com {
+	encode gzip
+	reverse_proxy 127.0.0.1:8000
+}

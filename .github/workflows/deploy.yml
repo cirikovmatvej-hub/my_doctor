@@ -33,3 +33,5 @@ jobs:
             cd /opt/my_doctor_bot
             git pull
             systemctl restart mydoctor
+            # Веб-версия (docs/web-deploy.md): перезапускаем, только если сервис уже установлен на сервере.
+            if systemctl cat mydoctor-web >/dev/null 2>&1; then systemctl restart mydoctor-web; fi

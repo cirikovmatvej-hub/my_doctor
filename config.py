@@ -24,6 +24,25 @@ API_JWT_SECRET: str = os.getenv("API_JWT_SECRET", "")
 APPLE_BUNDLE_ID: str = os.getenv("APPLE_BUNDLE_ID", "")
 DEV_LOGIN_SECRET: str = os.getenv("DEV_LOGIN_SECRET", "")
 
+# ── Web app (email sign-in) ──────────────────────────────────────────────────
+# SMTP account the one-time codes are sent from. Port 465 = implicit TLS, any
+# other port = STARTTLS. Leave SMTP_HOST empty to disable sending (the request
+# endpoint then answers 503) — except with WEB_DEV_PRINT_CODES=true, which logs
+# the code to the server log instead and must never be set in production.
+SMTP_HOST: str = os.getenv("SMTP_HOST", "")
+SMTP_PORT: int = int(os.getenv("SMTP_PORT", "465"))
+SMTP_USER: str = os.getenv("SMTP_USER", "")
+SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
+SMTP_FROM: str = os.getenv("SMTP_FROM", SMTP_USER)
+WEB_DEV_PRINT_CODES: bool = os.getenv("WEB_DEV_PRINT_CODES", "false").lower() == "true"
+# Set true only when the API sits behind a reverse proxy that overwrites
+# X-Forwarded-For (Caddy/nginx do) — the per-IP limits then use the real client IP.
+TRUST_PROXY_HEADERS: bool = os.getenv("TRUST_PROXY_HEADERS", "false").lower() == "true"
+# Cap on consultation messages one account can send per day — the model calls cost money.
+WEB_DAILY_MESSAGE_LIMIT: int = int(os.getenv("WEB_DAILY_MESSAGE_LIMIT", "100"))
+# Serve /docs and /openapi.json (off by default on a public deployment).
+API_DOCS_ENABLED: bool = os.getenv("API_DOCS_ENABLED", "false").lower() == "true"
+
 # ── Admin ──────────────────────────────────────────────────────────────────
 # Telegram user ids allowed to run /stats. Comma-separated in the env var —
 # defaults to the owner's own id (from local testing) so it works out of the

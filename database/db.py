@@ -1,3 +1,5 @@
+import hmac
+
 import aiosqlite
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
@@ -284,6 +286,29 @@ async def init_db() -> None:
             await db.execute("DROP TABLE users_old")
             await db.commit()
 
+        # Web sign-in (email + one-time code). Added after the rebuild above on
+        # purpose: that rebuild copies only the columns it lists, so a column
+        # added earlier would be lost on a legacy DB. web_email is stored
+        # lower-cased; the unique index makes "same address, same account" hold.
+        async with db.execute("PRAGMA table_info(users)") as cur:
+            existing_cols = {row[1] async for row in cur}
+        if "web_email" not in existing_cols:
+            await db.execute("ALTER TABLE users ADD COLUMN web_email TEXT")
+        await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_users_web_email ON users (web_email)")
+        # One row per address: only the latest code is valid. Holds a hash, never the code.
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS email_login_codes (
+                email          TEXT PRIMARY KEY,
+                code_hash      TEXT NOT NULL,
+                expires_at     REAL NOT NULL,
+                attempts       INTEGER NOT NULL DEFAULT 0,
+                last_sent_at   REAL NOT NULL,
+                window_start   REAL NOT NULL,
+                sent_in_window INTEGER NOT NULL DEFAULT 1
+            )
+        """)
+        await db.commit()
+
 
 # ── Users ──────────────────────────────────────────────────────────────────
 
@@ -424,6 +449,10 @@ async def delete_user_account(user_id: int) -> None:
         await db.execute("DELETE FROM appointment_followups WHERE user_id=?", (user_id,))
         await db.execute("DELETE FROM family_members WHERE owner_user_id=?", (user_id,))
         await db.execute("DELETE FROM diary_entries WHERE user_id=?", (user_id,))
+        await db.execute(
+            "DELETE FROM email_login_codes WHERE email = (SELECT web_email FROM users WHERE id=?)",
+            (user_id,),
+        )
         await db.execute("DELETE FROM users WHERE id=?", (user_id,))
         await db.commit()
 
@@ -441,6 +470,72 @@ async def get_or_create_user_by_apple_sub(apple_sub: str, email: str | None = No
         async with db.execute("SELECT id FROM users WHERE apple_sub = ?", (apple_sub,)) as cur:
             row = await cur.fetchone()
         return row[0]
+
+
+async def get_or_create_user_by_email(email: str) -> int:
+    """The web app's account for a (lower-cased) verified address. The unique
+    index on web_email makes a concurrent first sign-in resolve to one row."""
+    async with _connect() as db:
+        await db.execute("INSERT OR IGNORE INTO users (web_email) VALUES (?)", (email,))
+        await db.commit()
+        async with db.execute("SELECT id FROM users WHERE web_email = ?", (email,)) as cur:
+            row = await cur.fetchone()
+        return row[0]
+
+
+CODE_RESEND_COOLDOWN = 60          # seconds between codes to one address
+CODE_MAX_SENDS_PER_HOUR = 5
+CODE_MAX_ATTEMPTS = 5              # wrong guesses before the code is dead
+
+
+async def store_email_code(email: str, code_hash: str, now: float, ttl: float) -> str:
+    """Save a freshly generated code unless this address was asked too recently
+    or too often. Returns "ok", "cooldown" or "limit". Done in one connection so
+    two simultaneous requests can't both slip past the limits."""
+    async with _connect() as db:
+        async with db.execute(
+            "SELECT last_sent_at, window_start, sent_in_window FROM email_login_codes WHERE email=?",
+            (email,),
+        ) as cur:
+            row = await cur.fetchone()
+        window_start, sent = now, 1
+        if row:
+            last_sent, old_window, old_sent = row
+            if now - last_sent < CODE_RESEND_COOLDOWN:
+                return "cooldown"
+            if now - old_window < 3600:
+                if old_sent >= CODE_MAX_SENDS_PER_HOUR:
+                    return "limit"
+                window_start, sent = old_window, old_sent + 1
+        await db.execute(
+            "INSERT OR REPLACE INTO email_login_codes "
+            "(email, code_hash, expires_at, attempts, last_sent_at, window_start, sent_in_window) "
+            "VALUES (?, ?, ?, 0, ?, ?, ?)",
+            (email, code_hash, now + ttl, now, window_start, sent),
+        )
+        await db.commit()
+        return "ok"
+
+
+async def consume_email_code(email: str, code_hash: str, now: float) -> bool:
+    """True once, for the right unexpired code. Every check burns one attempt
+    first (atomically), so concurrent guesses can't exceed CODE_MAX_ATTEMPTS."""
+    async with _connect() as db:
+        cur = await db.execute(
+            "UPDATE email_login_codes SET attempts = attempts + 1 "
+            "WHERE email=? AND attempts < ? AND expires_at > ?",
+            (email, CODE_MAX_ATTEMPTS, now),
+        )
+        if cur.rowcount != 1:
+            await db.commit()
+            return False
+        async with db.execute("SELECT code_hash FROM email_login_codes WHERE email=?", (email,)) as c2:
+            row = await c2.fetchone()
+        ok = row is not None and hmac.compare_digest(row[0], code_hash)
+        if ok:
+            await db.execute("DELETE FROM email_login_codes WHERE email=?", (email,))
+        await db.commit()
+        return ok
 
 
 async def get_user_profile_by_id(user_id: int) -> dict | None:
@@ -572,6 +667,18 @@ async def add_messages(session_id: int, items: list[tuple[str, str]]) -> bool:
                 return False
         await db.commit()
         return True
+
+
+async def count_recent_user_messages(user_id: int, hours: int = 24) -> int:
+    """Messages this user has sent to the model in a rolling window — the
+    basis for the daily cost cap. created_at is SQLite's UTC CURRENT_TIMESTAMP."""
+    async with _connect() as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM messages m JOIN sessions s ON s.id = m.session_id "
+            "WHERE s.user_id = ? AND m.role = 'user' AND m.created_at >= datetime('now', ?)",
+            (user_id, f"-{int(hours)} hours"),
+        ) as cur:
+            return (await cur.fetchone())[0]
 
 
 async def get_user_sessions(user_id: int, limit: int = 5) -> list:

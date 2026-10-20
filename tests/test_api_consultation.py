@@ -286,3 +286,48 @@ def test_empty_or_oversized_message_is_rejected(tmp_path, monkeypatch):
         assert client.post(url, json={"text": "а" * 4001}).status_code == 422
     finally:
         app.dependency_overrides.clear()
+
+
+def test_daily_message_limit_stops_further_model_calls(tmp_path, monkeypatch):
+    """The web app is public and every turn costs a model call, so an account
+    gets a rolling-24h cap. Over the cap: 429 and the model is never called."""
+    client = _setup(tmp_path, monkeypatch, {"type": "question", "text": "Как давно?"})
+    monkeypatch.setattr(consultation, "WEB_DAILY_MESSAGE_LIMIT", 2)
+    calls = []
+    original = consultation.analyze_symptoms
+
+    async def counting(*args, **kwargs):
+        calls.append(1)
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(consultation, "analyze_symptoms", counting)
+    try:
+        session_id = client.post("/consultations", json={}).json()["session_id"]
+        url = f"/consultations/{session_id}/messages"
+        assert client.post(url, json={"text": "раз"}).status_code == 200
+        assert client.post(url, json={"text": "два"}).status_code == 200
+        blocked = client.post(url, json={"text": "три"})
+        assert blocked.status_code == 429 and "лимит" in blocked.json()["detail"]
+        assert len(calls) == 2
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_messages_older_than_a_day_do_not_count_toward_the_limit(tmp_path, monkeypatch):
+    client = _setup(tmp_path, monkeypatch, {"type": "question", "text": "Как давно?"})
+    monkeypatch.setattr(consultation, "WEB_DAILY_MESSAGE_LIMIT", 1)
+    try:
+        session_id = client.post("/consultations", json={}).json()["session_id"]
+        url = f"/consultations/{session_id}/messages"
+        assert client.post(url, json={"text": "раз"}).status_code == 200
+        assert client.post(url, json={"text": "два"}).status_code == 429
+
+        async def age_messages():
+            async with aiosqlite.connect(db.DATABASE_PATH) as conn:
+                await conn.execute("UPDATE messages SET created_at = datetime('now', '-25 hours')")
+                await conn.commit()
+
+        asyncio.run(age_messages())
+        assert client.post(url, json={"text": "два"}).status_code == 200
+    finally:
+        app.dependency_overrides.clear()
